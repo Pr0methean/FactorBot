@@ -487,6 +487,10 @@ async fn main() -> anyhow::Result<()> {
                     return;
                 }
                 (id, task_return_permit) = prp_receiver.recv() => {
+                    if graph::is_glitched_prp(id) {
+                        warn!("{id}: Skipping glitched PRP entry");
+                        continue;
+                    }
                     info!("{id}: Ready to check a PRP");
                     let mut stopped_early = false;
                     let Some(bases_text) = check_c_and_prp_http
@@ -694,6 +698,10 @@ async fn main() -> anyhow::Result<()> {
                     }
                     (id, task_return_permit) = sleep_until(next_unknown_attempt).then(|_| u_receiver.recv())
                     => {
+                        if graph::is_glitched_prp(id) {
+                            warn!("{id}: Skipping glitched PRP entry");
+                            continue;
+                        }
                         info!("{id}: Ready to check a U");
                         let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
                         let Some(result) = check_u_http.retrying_get_and_decode(&url, RETRY_DELAY).await else {
@@ -947,6 +955,10 @@ async fn main() -> anyhow::Result<()> {
                     };
                     for ((prp_id, _), prp_permit) in http.read_ids_and_exprs(&results_text).zip(prp_permits)
                     {
+                        if graph::is_glitched_prp(prp_id) {
+                            warn!("{prp_id}: Skipping glitched PRP entry");
+                            continue;
+                        }
                         if !matches!(prp_filter.test_and_add(&prp_id), Ok(true)) {
                             warn!("{prp_id}: Skipping duplicate PRP");
                             continue;

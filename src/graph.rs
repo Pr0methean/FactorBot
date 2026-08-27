@@ -38,6 +38,17 @@ use std::sync::OnceLock;
 
 pub type EntryId = u128;
 
+pub const GLITCHED_PRP_IDS: [EntryId; 3] = [
+    1100000008647656972,
+    1100000003518922791,
+    1100000003518922097,
+];
+
+#[inline]
+pub fn is_glitched_prp(id: EntryId) -> bool {
+    GLITCHED_PRP_IDS.contains(&id)
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum Divisibility {
     NotFactor,
@@ -1623,6 +1634,7 @@ async fn add_factors_to_graph(
 #[cfg(test)]
 pub mod tests {
     use crate::GLOBAL;
+    use crate::graph::is_glitched_prp;
     use rand::Rng;
     use rand::rng;
     use std::env::temp_dir;
@@ -2047,5 +2059,13 @@ pub mod tests {
         let (vid, added) = add_factor_node(&mut data, fa.clone(), Some(1), &http);
         assert!(added);
         assert_eq!(data.get_factor(vid), fa);
+    }
+
+    #[test]
+    fn test_is_glitched_prp() {
+        assert!(is_glitched_prp(1100000008647656972));
+        assert!(is_glitched_prp(1100000003518922791));
+        assert!(is_glitched_prp(1100000003518922097));
+        assert!(!is_glitched_prp(1234567890));
     }
 }

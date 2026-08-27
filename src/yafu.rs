@@ -209,6 +209,13 @@ pub async fn yafu_task(
                 }
             }
         }
+        let Some(item) = heap.pop() else {
+            continue;
+        };
+
+        let id = item.id;
+        let number = item.number;
+
         if persistent_yafu.is_none() {
             match PersistentYafu::spawn().await {
                 Ok(y) => {
@@ -222,13 +229,6 @@ pub async fn yafu_task(
                 }
             }
         }
-
-        let Some(item) = heap.pop() else {
-            continue;
-        };
-
-        let id = item.id;
-        let number = item.number;
 
         let yafu = persistent_yafu.as_mut().unwrap();
         info!(
