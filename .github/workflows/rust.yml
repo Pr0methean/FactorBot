@@ -90,7 +90,7 @@ jobs:
             export RUST_BACKTRACE=full
           fi
           # RUSTFLAGS is set at job level so builds are reproducible across the steps and match the cached artifacts.
-          NO_RESERVE=1 RUN=${{github.run_number}} timeout 355m nice -+19 ./target/release/ScrapeFactordbPrpsRust
+          NO_RESERVE=1 RUN=${{github.run_number}} timeout 355m nice -+19 ./target/release/FactorBot
       - name: Upload any failed submissions
         if: always()
         uses: actions/upload-artifact@v7
