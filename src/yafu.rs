@@ -58,6 +58,30 @@ impl PartialOrd for YafuWorkItem {
     }
 }
 
+fn is_sigill(status: &std::process::ExitStatus) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal() == Some(4)
+    }
+    #[cfg(windows)]
+    {
+        status.code() == Some(0xC000001D_u32 as i32)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = status;
+        false
+    }
+}
+
+async fn wait_for_status(child: &mut tokio::process::Child) -> Option<std::process::ExitStatus> {
+    match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+        Ok(Ok(status)) => Some(status),
+        _ => None,
+    }
+}
+
 struct PersistentYafu {
     child: tokio::process::Child,
     stdin: tokio::process::ChildStdin,
@@ -133,6 +157,18 @@ pub async fn yafu_task(
     };
 
     loop {
+        if persistent_yafu.is_none() && !shutdown_received {
+            match PersistentYafu::spawn().await {
+                Ok(y) => {
+                    info!("Restarted yafu process ahead of time");
+                    persistent_yafu = Some(y);
+                }
+                Err(e) => {
+                    error!("Failed to restart yafu process ahead of time: {e}");
+                }
+            }
+        }
+
         while let Ok(item) = receiver.try_recv() {
             if in_flight.insert(item.id) {
                 heap.push(item);
@@ -204,15 +240,29 @@ pub async fn yafu_task(
 
         let expr = format!("factor({number})\n");
         if let Err(e) = yafu.stdin.write_all(expr.as_bytes()).await {
-            error!("{id}: Failed to write to yafu stdin: {e}");
+            let status = wait_for_status(&mut yafu.child).await;
+            if status.as_ref().map_or(false, is_sigill) {
+                error!(
+                    "{id}: yafu process exited with SIGILL while writing stdin; aborting composite {id} ({number}) and restarting yafu"
+                );
+            } else {
+                error!("{id}: Failed to write to yafu stdin: {e}");
+                in_flight.remove(&id);
+            }
             persistent_yafu = None;
-            in_flight.remove(&id);
             continue;
         }
         if let Err(e) = yafu.stdin.flush().await {
-            error!("{id}: Failed to flush yafu stdin: {e}");
+            let status = wait_for_status(&mut yafu.child).await;
+            if status.as_ref().map_or(false, is_sigill) {
+                error!(
+                    "{id}: yafu process exited with SIGILL while flushing stdin; aborting composite {id} ({number}) and restarting yafu"
+                );
+            } else {
+                error!("{id}: Failed to flush yafu stdin: {e}");
+                in_flight.remove(&id);
+            }
             persistent_yafu = None;
-            in_flight.remove(&id);
             continue;
         }
 
@@ -276,12 +326,26 @@ pub async fn yafu_task(
                             }
                         }
                         Ok(None) => {
-                            error!("{id}: yafu stdout closed unexpectedly");
+                            let status = wait_for_status(&mut yafu.child).await;
+                            if status.as_ref().map_or(false, is_sigill) {
+                                error!(
+                                    "{id}: yafu process exited with SIGILL while factoring composite {number}; aborting composite {id} and restarting yafu"
+                                );
+                            } else {
+                                error!("{id}: yafu stdout closed unexpectedly (status: {status:?})");
+                            }
                             yafu_failed = true;
                             break;
                         }
                         Err(e) => {
-                            error!("{id}: Error reading yafu stdout: {e}");
+                            let status = wait_for_status(&mut yafu.child).await;
+                            if status.as_ref().map_or(false, is_sigill) {
+                                error!(
+                                    "{id}: yafu process exited with SIGILL while factoring composite {number}; aborting composite {id} and restarting yafu"
+                                );
+                            } else {
+                                error!("{id}: Error reading yafu stdout: {e} (status: {status:?})");
+                            }
                             yafu_failed = true;
                             break;
                         }
@@ -327,5 +391,35 @@ pub async fn yafu_task(
                 let _ = yafu.child.wait().await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn test_is_sigill_unix() {
+        use std::os::unix::process::ExitStatusExt;
+        let status_sigill = std::process::ExitStatus::from_raw(4);
+        assert!(is_sigill(&status_sigill));
+
+        let status_normal = std::process::ExitStatus::from_raw(0);
+        assert!(!is_sigill(&status_normal));
+
+        let status_sigterm = std::process::ExitStatus::from_raw(15);
+        assert!(!is_sigill(&status_sigterm));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_is_sigill_windows() {
+        use std::os::windows::process::ExitStatusExt;
+        let status_sigill = std::process::ExitStatus::from_raw(0xC000001D);
+        assert!(is_sigill(&status_sigill));
+
+        let status_normal = std::process::ExitStatus::from_raw(0);
+        assert!(!is_sigill(&status_normal));
     }
 }

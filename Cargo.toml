@@ -52,3 +52,4 @@ tikv-jemallocator = "0.7"
 [dev-dependencies]
 mockall = "0.15"
 const_format = "0.2"
+primitive-types = "0.14.0"
