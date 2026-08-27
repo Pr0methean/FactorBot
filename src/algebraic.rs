@@ -2629,9 +2629,9 @@ fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
                 for (term, coeff) in terms.iter() {
                     let term_val = modulo_as_reduced(term, reducer)? * coeff.unsigned_abs();
                     if *coeff < 0 {
-                        result = result - term_val;
+                        result -= term_val;
                     } else {
-                        result = result + term_val;
+                        result += term_val;
                     }
                 }
                 Some(result)
@@ -2639,8 +2639,7 @@ fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
             Multiply { ref terms, .. } => {
                 let mut product = reducer.convert(1);
                 for (term, exponent) in terms.iter() {
-                    product = product
-                        * modulo_as_reduced(term, reducer)?.pow(&NumericFactor::from(*exponent));
+                    product *= modulo_as_reduced(term, reducer)?.pow(&NumericFactor::from(*exponent));
                 }
                 Some(product)
             }
@@ -2653,7 +2652,7 @@ fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
                 for (term, exponent) in right.iter() {
                     let term_mod =
                         modulo_as_reduced(term, reducer)?.pow(&NumericFactor::from(*exponent));
-                    result = result * term_mod.inv()?;
+                    result *= term_mod.inv()?;
                 }
                 Some(result)
             }
@@ -2692,7 +2691,7 @@ fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
                 }
                 let mut result = ReducedInt::new(1, &modulus);
                 for i in 2..=term {
-                    result = result * i;
+                    result *= i;
                     if result.is_zero() {
                         break;
                     }
@@ -2708,7 +2707,7 @@ fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
                 let mut result = ReducedInt::new(1, &modulus);
                 for i in 2..=term {
                     if is_prime(i) {
-                        result = result * i;
+                        result *= i;
                         if result.is_zero() {
                             break;
                         }

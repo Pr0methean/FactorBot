@@ -341,6 +341,25 @@ async fn main() -> anyhow::Result<()> {
     let mut sys = sysinfo::System::new_with_specifics(
         RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()),
     );
+    let deadline_val = std::env::var("DEADLINE").ok();
+    if let Some(deadline_str) = deadline_val
+        && let Ok(deadline_unix) = deadline_str.parse::<u64>()
+    {
+        let exit_system_time = SystemTime::UNIX_EPOCH + Duration::from_secs(deadline_unix);
+        let now_instant = Instant::now();
+        let now_system_time = SystemTime::now();
+        let Ok(remaining_duration) = exit_system_time.duration_since(now_system_time) else {
+            error!("Deadline has already passed");
+            exit(0);
+        };
+        let exit_instant = now_instant + remaining_duration;
+        if EXIT_TIME.set(exit_instant).is_ok() {
+            info!("Set EXIT_TIME deadline to Unix timestamp {deadline_unix} ({remaining_duration:?} remaining)");
+        }
+    } else if std::env::var("CI").is_ok()
+        && EXIT_TIME.set(Instant::now().add(Duration::from_mins(355))).is_ok() {
+            warn!("Set EXIT_TIME using fallback for CI (355m)");
+        }
     let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
     simple_log::console("info,reqwest=debug").unwrap();
 
@@ -439,26 +458,6 @@ async fn main() -> anyhow::Result<()> {
     let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
     let (c_sender, c_raw_receiver) = channel(C_TASK_BUFFER_SIZE);
     let mut c_receiver = PushbackReceiver::new(c_raw_receiver, &c_sender);
-    let deadline_val = std::env::var("DEADLINE").ok();
-    if let Some(deadline_str) = deadline_val
-        && let Ok(deadline_unix) = deadline_str.parse::<u64>()
-    {
-        let exit_system_time = SystemTime::UNIX_EPOCH + Duration::from_secs(deadline_unix);
-        let now_instant = Instant::now();
-        let now_system_time = SystemTime::now();
-        let Ok(remaining_duration) = exit_system_time.duration_since(now_system_time) else {
-            error!("Deadline has already passed");
-            exit(0);
-        };
-        let exit_instant = now_instant + remaining_duration;
-        if EXIT_TIME.set(exit_instant).is_ok() {
-            info!("Set EXIT_TIME deadline to Unix timestamp {deadline_unix} ({remaining_duration:?} remaining)");
-        }
-    } else if std::env::var("CI").is_ok() {
-        if EXIT_TIME.set(Instant::now().add(Duration::from_mins(355))).is_ok() {
-            warn!("Set EXIT_TIME using fallback for CI (355m)");
-        }
-    }
     let http = Arc::new(RealFactorDbClient::new(rph_limit));
     // Spawn the yafu factoring task. The channel is bounded so that backpressure
     // propagates naturally if yafu can't keep up.
