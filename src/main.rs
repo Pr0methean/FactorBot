@@ -242,7 +242,7 @@ async fn check_composite(
                     let number_str = factor.to_unelided_string().into_owned();
                     let item = YafuWorkItem {
                         id,
-                        number: number_str.into(),
+                        number: number_str,
                         lower_bound,
                         upper_bound,
                     };
@@ -550,9 +550,9 @@ async fn main() -> anyhow::Result<()> {
         let mut c_filter = CuckooFilter::with_capacity(4096);
         let nm1_regex = Regex::new("id=([0-9]+)\">N-1<").unwrap();
         let np1_regex = Regex::new("id=([0-9]+)\">N\\+1<").unwrap();
-        let bases_regex = Regex::new("Bases checked[^\n]*\n[^\n]*([0-9, ]+)").unwrap();
-        let mut bases_before_next_cpu_check = 1;
-        let cert_regex = Regex::new("(Verified|Processing)").unwrap();
+        let _bases_regex = Regex::new("Bases checked[^\n]*\n[^\n]*([0-9, ]+)").unwrap();
+        let _bases_before_next_cpu_check = 1;
+        let _cert_regex = Regex::new("(Verified|Processing)").unwrap();
         loop {
             info!("check_c_and_prp: Polling for next task");
             select! {
