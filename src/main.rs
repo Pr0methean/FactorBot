@@ -1,4 +1,3 @@
-#![allow(stable_features)]
 #![allow(incomplete_features)]
 #![feature(float_gamma)]
 #![feature(exact_div)]
