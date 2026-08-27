@@ -445,11 +445,12 @@ async fn main() -> anyhow::Result<()> {
     if let Some(deadline_str) = deadline_val
         && let Ok(deadline_unix) = deadline_str.parse::<u64>()
     {
-        let now = Instant::now();
-        let unix_epoch_instant = now - (SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap());
-        let exit_instant = unix_epoch_instant + Duration::from_secs(deadline_unix);
-        let remaining_secs = exit_instant.duration_since(now).as_secs();
+        let exit_system_time = SystemTime::UNIX_EPOCH + Duration::from_secs(deadline_unix);
+        let now_system_time = SystemTime::now();
+        let remaining_duration = exit_system_time.duration_since(now_system_time).unwrap();
+        let exit_instant = Instant::now() + remaining_duration;
         if EXIT_TIME.set(exit_instant).is_ok() {
+            let remaining_secs = remaining_duration.as_secs();
             info!("Set EXIT_TIME deadline to Unix timestamp {deadline_unix} ({remaining_secs}s remaining)");
         }
     } else if std::env::var("CI").is_ok() {
