@@ -2080,19 +2080,16 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                 let current_terms = new_terms.as_ref().unwrap_or(terms);
 
                 for (term, exponent) in current_terms.iter() {
-                    if let Some(n) = evaluate_as_numeric(term) {
+                    {
+                        let n = evaluate_as_numeric(term)?;
                         product_numeric = product_numeric.checked_mul(n.checked_pow(*exponent)?)?;
-                    } else {
-                        // If we can't evaluate symbol as numeric, we can't do numeric fallback
-                        return None;
                     }
                 }
 
                 for (term, exponent) in remaining_divisor_terms.iter() {
-                    if let Some(n) = evaluate_as_numeric(term) {
+                    {
+                        let n = evaluate_as_numeric(term)?;
                         divisor_numeric = divisor_numeric.checked_mul(n.checked_pow(*exponent)?)?;
-                    } else {
-                        return None;
                     }
                 }
 

@@ -38,6 +38,17 @@ use std::sync::OnceLock;
 
 pub type EntryId = u128;
 
+pub const GLITCHED_PRP_IDS: [EntryId; 3] = [
+    1100000008647656972,
+    1100000003518922791,
+    1100000003518922097,
+];
+
+#[inline]
+pub fn is_glitched_prp(id: EntryId) -> bool {
+    GLITCHED_PRP_IDS.contains(&id)
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum Divisibility {
     NotFactor,
@@ -1623,6 +1634,7 @@ async fn add_factors_to_graph(
 #[cfg(test)]
 pub mod tests {
     use crate::GLOBAL;
+    use crate::graph::is_glitched_prp;
     use rand::Rng;
     use rand::rng;
     use std::env::temp_dir;
@@ -1652,12 +1664,11 @@ pub mod tests {
         let mut http = MockFactorDbClient::new();
         http.expect_known_factors_as_digits().never();
         http.expect_cached_factors().return_const(None);
-        http.expect_parse_resource_limits().never();
+        http.expect_wait_if_resource_limited().never();
         http.expect_report_numeric_factor().never();
         http.expect_retrying_get_and_decode().never();
         http.expect_try_get_and_decode().never();
         http.expect_try_get_expression_form().never();
-        http.expect_try_get_resource_limits().never();
         http.expect_try_report_factor().never();
 
         let mut data = FactorData::default();
@@ -1698,12 +1709,11 @@ pub mod tests {
         let mut http = MockFactorDbClient::new();
         http.expect_known_factors_as_digits().never();
         http.expect_cached_factors().return_const(None);
-        http.expect_parse_resource_limits().never();
+        http.expect_wait_if_resource_limited().never();
         http.expect_report_numeric_factor().never();
         http.expect_retrying_get_and_decode().never();
         http.expect_try_get_and_decode().never();
         http.expect_try_get_expression_form().never();
-        http.expect_try_get_resource_limits().never();
         http.expect_try_report_factor().never();
 
         const LARGE_PRIME: NumericFactor = 340282366920938463463374607431768211297; // last prime below 2^128
@@ -1799,12 +1809,11 @@ pub mod tests {
         let mut http = MockFactorDbClient::new();
         http.expect_known_factors_as_digits().never();
         http.expect_cached_factors().return_const(None);
-        http.expect_parse_resource_limits().never();
+        http.expect_wait_if_resource_limited().never();
         http.expect_report_numeric_factor().never();
         http.expect_retrying_get_and_decode().never();
         http.expect_try_get_and_decode().never();
         http.expect_try_get_expression_form().never();
-        http.expect_try_get_resource_limits().never();
         http.expect_try_report_factor().never();
 
         let mut data = FactorData::default();
@@ -2050,5 +2059,13 @@ pub mod tests {
         let (vid, added) = add_factor_node(&mut data, fa.clone(), Some(1), &http);
         assert!(added);
         assert_eq!(data.get_factor(vid), fa);
+    }
+
+    #[test]
+    fn test_is_glitched_prp() {
+        assert!(is_glitched_prp(1100000008647656972));
+        assert!(is_glitched_prp(1100000003518922791));
+        assert!(is_glitched_prp(1100000003518922097));
+        assert!(!is_glitched_prp(1234567890));
     }
 }

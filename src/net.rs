@@ -69,11 +69,10 @@ impl CurlResponseCollector {
 
 #[cfg_attr(test, mockall::automock)]
 pub trait FactorDbClient {
-    async fn parse_resource_limits(
+    async fn wait_if_resource_limited(
         &self,
-        bases_before_next_cpu_check: &mut usize,
         resources_text: &str,
-    ) -> Option<ResourceLimits>;
+    ) -> bool;
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
     async fn retrying_get_and_decode(
@@ -82,10 +81,6 @@ pub trait FactorDbClient {
         retry_delay: Duration,
     ) -> Option<HipStr<'static>>;
     async fn try_get_and_decode(&self, url: &str) -> Option<HipStr<'static>>;
-    async fn try_get_resource_limits(
-        &self,
-        bases_before_next_cpu_check: &mut usize,
-    ) -> Option<ResourceLimits>;
     async fn try_get_expression_form(&self, entry_id: EntryId) -> Option<Factor>;
     async fn known_factors_as_digits<'a>(
         &self,
@@ -128,11 +123,6 @@ pub struct RealFactorDbClient {
     by_id_cache: BasicCache<EntryId, ProcessedStatusApiResponse>,
     by_expr_cache: BasicCache<Factor, ProcessedStatusApiResponse>,
     expression_form_cache: BasicCache<EntryId, Factor>,
-}
-
-pub struct ResourceLimits {
-    pub cpu_tenths_spent: usize,
-    pub resets_at: Instant,
 }
 
 impl RealFactorDbClient {
@@ -249,15 +239,13 @@ impl RealFactorDbClient {
 
 impl FactorDbClient for RealFactorDbClient {
     #[framed]
-    async fn parse_resource_limits(
+    async fn wait_if_resource_limited(
         &self,
-        bases_before_next_cpu_check: &mut usize,
         resources_text: &str,
-    ) -> Option<ResourceLimits> {
+    ) -> bool {
         let now = Instant::now();
         let Some(captures) = self.resources_regex.captures_iter(resources_text).next() else {
-            *bases_before_next_cpu_check = 1;
-            return None;
+            return false;
         };
         let (
             _,
@@ -302,10 +290,7 @@ impl FactorDbClient for RealFactorDbClient {
         }
         self.all_threads_blocked_until
             .store(resets_at.into(), Release);
-        Some(ResourceLimits {
-            cpu_tenths_spent,
-            resets_at,
-        })
+        true
     }
 
     /// Executes a GET request with a large reasonable default number of retries, or else
@@ -330,25 +315,13 @@ impl FactorDbClient for RealFactorDbClient {
         sleep_until(self.all_threads_blocked_until.load(Acquire).into()).await;
         loop {
             let response = self.try_get_and_decode_core(url).await?;
-            let mut temp_bases = usize::MAX;
-            if self.parse_resource_limits(&mut temp_bases, &response).await.is_none()
+            if !self.wait_if_resource_limited(&response).await
             {
                 return Some(response);
             }
         }
     }
 
-    #[framed]
-    async fn try_get_resource_limits(
-        &self,
-        bases_before_next_cpu_check: &mut usize,
-    ) -> Option<ResourceLimits> {
-        let response = self
-            .try_get_and_decode_core("https://factordb.com/res.php")
-            .await?;
-        self.parse_resource_limits(bases_before_next_cpu_check, &response)
-            .await
-    }
     #[inline]
     #[framed]
     async fn try_get_expression_form(&self, entry_id: EntryId) -> Option<Factor> {
@@ -633,8 +606,7 @@ impl FactorDbClient for RealFactorDbClient {
                 } else if text.contains("Does not divide") {
                     DoesNotDivide
                 } else {
-                    let mut temp_bases = usize::MAX;
-                    let _ = self.parse_resource_limits(&mut temp_bases, &text);
+                    self.wait_if_resource_limited(&text).await;
                     OtherError
                 }
             }

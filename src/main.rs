@@ -1,9 +1,8 @@
-#![allow(stable_features)]
 #![allow(incomplete_features)]
 #![feature(float_gamma)]
 #![feature(exact_div)]
 #![feature(explicit_tail_calls)]
-#![feature(never_type)]
+#![recursion_limit = "256"]
 use tokio_stream::StreamExt;
 extern crate alloc;
 extern crate core;
@@ -20,7 +19,7 @@ use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::algebraic::Factor;
 use crate::graph::EntryId;
 use crate::monitor::Monitor;
-use crate::net::{FactorDbClient, FactorDbClientReadIdsAndExprs, ResourceLimits};
+use crate::net::{FactorDbClient, FactorDbClientReadIdsAndExprs};
 use crate::yafu::{YafuWorkItem, YAFU_KILL_GRACE_PERIOD, YAFU_SENDER, yafu_task};
 use ahash::RandomState;
 use alloc::sync::Arc;
@@ -32,7 +31,7 @@ use futures_util::FutureExt;
 use hipstr::HipStr;
 use log::{error, info, warn};
 use net::NumberStatus::FullyFactored;
-use net::{CPU_TENTHS_SPENT_LAST_CHECK, RealFactorDbClient};
+use net::{RealFactorDbClient};
 use net::{NumberStatusExt, ProcessedStatusApiResponse};
 use quick_cache::UnitWeighter;
 use quick_cache::sync::{Cache, DefaultLifecycle};
@@ -53,7 +52,8 @@ use std::panic;
 use std::process::{abort, exit};
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::{Acquire, Release};
+use std::sync::atomic::Ordering::{Release};
+use std::time::SystemTime;
 use sysinfo::MemoryRefreshKind;
 use sysinfo::RefreshKind;
 use tokio::signal::ctrl_c;
@@ -242,7 +242,7 @@ async fn check_composite(
                     let number_str = factor.to_unelided_string().into_owned();
                     let item = YafuWorkItem {
                         id,
-                        number: number_str.into(),
+                        number: number_str,
                         lower_bound,
                         upper_bound,
                     };
@@ -303,84 +303,8 @@ async fn report_primality_proof(id: EntryId, parameter: &str, http: &impl Factor
         .await;
 }
 
-const MAX_BASES_BETWEEN_RESOURCE_CHECKS: usize = 254;
-
-const MIN_BASES_BETWEEN_RESOURCE_CHECKS: usize = 16;
-
 const MAX_CPU_BUDGET_TENTHS: usize = 6000;
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
-
-#[framed]
-async fn throttle_if_necessary(
-    http: &impl FactorDbClientReadIdsAndExprs,
-    c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
-    bases_before_next_cpu_check: &mut usize,
-    sleep_first: bool,
-    c_filter: &mut CuckooFilter<DefaultHasher>,
-) -> bool {
-    *bases_before_next_cpu_check -= 1;
-    if *bases_before_next_cpu_check != 0 {
-        return false;
-    }
-    if sleep_first {
-        composites_while_waiting(
-            Instant::now() + Duration::from_secs(10),
-            http,
-            c_receiver,
-            c_filter,
-        )
-        .await; // allow for delay in CPU accounting
-    }
-    // info!("Resources fetched");
-    let Some(ResourceLimits {
-        cpu_tenths_spent,
-        resets_at,
-    }) = http
-        .try_get_resource_limits(bases_before_next_cpu_check)
-        .await
-    else {
-        error!("Failed to parse resource limits");
-        return false;
-    };
-    let seconds_to_reset = resets_at
-        .saturating_duration_since(Instant::now())
-        .as_secs_f64();
-    let mut tenths_remaining = MAX_CPU_BUDGET_TENTHS.saturating_sub(cpu_tenths_spent);
-    if !NO_RESERVE.load(Acquire) {
-        tenths_remaining = tenths_remaining
-            .saturating_sub((seconds_to_reset * seconds_to_reset / 18000.0) as usize);
-    }
-    let mut bases_remaining = (tenths_remaining / 10).min(MAX_BASES_BETWEEN_RESOURCE_CHECKS);
-    if bases_remaining <= MIN_BASES_BETWEEN_RESOURCE_CHECKS {
-        warn!(
-            "CPU time spent this cycle: {:.1} seconds. Throttling {} seconds due to high server CPU usage",
-            cpu_tenths_spent as f64 * 0.1,
-            seconds_to_reset
-        );
-        if EXIT_TIME
-            .get()
-            .is_some_and(|exit_time| *exit_time <= resets_at)
-        {
-            warn!("Throttling won't end before program exit; exiting now");
-            exit(0);
-        }
-        composites_while_waiting(resets_at, http, c_receiver, c_filter).await;
-        *bases_before_next_cpu_check = MAX_BASES_BETWEEN_RESOURCE_CHECKS;
-        CPU_TENTHS_SPENT_LAST_CHECK.store(0, Release);
-    } else {
-        if bases_remaining < MIN_BASES_BETWEEN_RESOURCE_CHECKS {
-            bases_remaining = MIN_BASES_BETWEEN_RESOURCE_CHECKS;
-        }
-        info!(
-            "CPU time spent this cycle: {:.1} seconds; reset in {} seconds; checking again after {} bases",
-            cpu_tenths_spent as f64 * 0.1,
-            seconds_to_reset as usize,
-            bases_remaining
-        );
-        *bases_before_next_cpu_check = bases_remaining;
-    }
-    true
-}
 
 const STATS_INTERVAL: Duration = Duration::from_mins(1);
 
@@ -432,7 +356,9 @@ async fn main() -> anyhow::Result<()> {
         (sigint, tokio_stream::pending::<()>())
     });
 
-    let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
+    let is_no_reserve = std::env::var("NO_RESERVE")
+        .map(|v| !v.is_empty() && v != "0" && v != "false")
+        .unwrap_or(false);
     NO_RESERVE.store(is_no_reserve, Release);
     let mut c_digits = std::env::var("C_DIGITS")
         .ok()
@@ -446,8 +372,9 @@ async fn main() -> anyhow::Result<()> {
     let mut prp_digits = std::env::var("PRP_DIGITS")
         .ok()
         .and_then(|s| s.parse::<NumberLength>().ok());
-    if let Ok(run_number) = std::env::var("RUN") {
-        let mut run_number = run_number.parse::<EntryId>()?;
+    if let Ok(run_str) = std::env::var("RUN")
+        && let Ok(mut run_number) = run_str.parse::<EntryId>()
+    {
         if let Ok(sub_run_number) = std::env::var("SUB_RUN")
                 && let Ok(sub_run_number) = sub_run_number.parse::<EntryId>() {
             run_number += 149993 * (11 + sub_run_number);
@@ -512,8 +439,25 @@ async fn main() -> anyhow::Result<()> {
     let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
     let (c_sender, c_raw_receiver) = channel(C_TASK_BUFFER_SIZE);
     let mut c_receiver = PushbackReceiver::new(c_raw_receiver, &c_sender);
-    if std::env::var("CI").is_ok() {
-        EXIT_TIME.set(Instant::now().add(Duration::from_mins(355)))?;
+    let deadline_val = std::env::var("DEADLINE").ok();
+    if let Some(deadline_str) = deadline_val
+        && let Ok(deadline_unix) = deadline_str.parse::<u64>()
+    {
+        let exit_system_time = SystemTime::UNIX_EPOCH + Duration::from_secs(deadline_unix);
+        let now_instant = Instant::now();
+        let now_system_time = SystemTime::now();
+        let Ok(remaining_duration) = exit_system_time.duration_since(now_system_time) else {
+            error!("Deadline has already passed");
+            exit(0);
+        };
+        let exit_instant = now_instant + remaining_duration;
+        if EXIT_TIME.set(exit_instant).is_ok() {
+            info!("Set EXIT_TIME deadline to Unix timestamp {deadline_unix} ({remaining_duration:?} remaining)");
+        }
+    } else if std::env::var("CI").is_ok() {
+        if EXIT_TIME.set(Instant::now().add(Duration::from_mins(355))).is_ok() {
+            warn!("Set EXIT_TIME using fallback for CI (355m)");
+        }
     }
     let http = Arc::new(RealFactorDbClient::new(rph_limit));
     // Spawn the yafu factoring task. The channel is bounded so that backpressure
@@ -550,9 +494,9 @@ async fn main() -> anyhow::Result<()> {
         let mut c_filter = CuckooFilter::with_capacity(4096);
         let nm1_regex = Regex::new("id=([0-9]+)\">N-1<").unwrap();
         let np1_regex = Regex::new("id=([0-9]+)\">N\\+1<").unwrap();
-        let bases_regex = Regex::new("Bases checked[^\n]*\n[^\n]*([0-9, ]+)").unwrap();
-        let mut bases_before_next_cpu_check = 1;
-        let cert_regex = Regex::new("(Verified|Processing)").unwrap();
+        let _bases_regex = Regex::new("Bases checked[^\n]*\n[^\n]*([0-9, ]+)").unwrap();
+        let _bases_before_next_cpu_check = 1;
+        let _cert_regex = Regex::new("(Verified|Processing)").unwrap();
         loop {
             info!("check_c_and_prp: Polling for next task");
             select! {
@@ -562,6 +506,10 @@ async fn main() -> anyhow::Result<()> {
                     return;
                 }
                 (id, task_return_permit) = prp_receiver.recv() => {
+                    if graph::is_glitched_prp(id) {
+                        warn!("{id}: Skipping glitched PRP entry");
+                        continue;
+                    }
                     info!("{id}: Ready to check a PRP");
                     let mut stopped_early = false;
                     let Some(bases_text) = check_c_and_prp_http
@@ -769,6 +717,10 @@ async fn main() -> anyhow::Result<()> {
                     }
                     (id, task_return_permit) = sleep_until(next_unknown_attempt).then(|_| u_receiver.recv())
                     => {
+                        if graph::is_glitched_prp(id) {
+                            warn!("{id}: Skipping glitched PRP entry");
+                            continue;
+                        }
                         info!("{id}: Ready to check a U");
                         let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
                         let Some(result) = check_u_http.retrying_get_and_decode(&url, RETRY_DELAY).await else {
@@ -1022,6 +974,10 @@ async fn main() -> anyhow::Result<()> {
                     };
                     for ((prp_id, _), prp_permit) in http.read_ids_and_exprs(&results_text).zip(prp_permits)
                     {
+                        if graph::is_glitched_prp(prp_id) {
+                            warn!("{prp_id}: Skipping glitched PRP entry");
+                            continue;
+                        }
                         if !matches!(prp_filter.test_and_add(&prp_id), Ok(true)) {
                             warn!("{prp_id}: Skipping duplicate PRP");
                             continue;
@@ -1071,6 +1027,25 @@ pub enum ReportFactorResult {
     DoesNotDivide,
     AlreadyFullyFactored,
     OtherError,
+}
+
+#[cfg(test)]
+mod main_tests {
+    use std::time::Duration;
+    use tokio::time::Instant;
+
+    #[test]
+    fn test_deadline_calculation() {
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let deadline_unix = now_unix + 21540;
+        let remaining_secs = deadline_unix.saturating_sub(now_unix);
+        assert_eq!(remaining_secs, 21540);
+        let exit_instant = Instant::now() + Duration::from_secs(remaining_secs);
+        assert!(exit_instant > Instant::now());
+    }
 }
 
 const MAX_ID_EQUAL_TO_VALUE: EntryId = 999_999_999_999_999_999;
