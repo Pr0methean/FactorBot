@@ -446,12 +446,13 @@ async fn main() -> anyhow::Result<()> {
         && let Ok(deadline_unix) = deadline_str.parse::<u64>()
     {
         let exit_system_time = SystemTime::UNIX_EPOCH + Duration::from_secs(deadline_unix);
+        let now_instant = Instant::now();
         let now_system_time = SystemTime::now();
         let Ok(remaining_duration) = exit_system_time.duration_since(now_system_time) else {
             error!("Deadline has already passed");
             exit(0);
         };
-        let exit_instant = Instant::now() + remaining_duration;
+        let exit_instant = now_instant + remaining_duration;
         if EXIT_TIME.set(exit_instant).is_ok() {
             let remaining_secs = remaining_duration.as_secs();
             info!("Set EXIT_TIME deadline to Unix timestamp {deadline_unix} ({remaining_secs}s remaining)");
