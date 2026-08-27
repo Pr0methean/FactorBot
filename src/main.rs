@@ -356,11 +356,10 @@ async fn main() -> anyhow::Result<()> {
         if EXIT_TIME.set(exit_instant).is_ok() {
             info!("Set EXIT_TIME deadline to Unix timestamp {deadline_unix} ({remaining_duration:?} remaining)");
         }
-    } else if std::env::var("CI").is_ok() {
-        if EXIT_TIME.set(Instant::now().add(Duration::from_mins(355))).is_ok() {
+    } else if std::env::var("CI").is_ok()
+        && EXIT_TIME.set(Instant::now().add(Duration::from_mins(355))).is_ok() {
             warn!("Set EXIT_TIME using fallback for CI (355m)");
         }
-    }
     let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
     simple_log::console("info,reqwest=debug").unwrap();
 

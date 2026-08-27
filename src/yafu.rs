@@ -240,7 +240,7 @@ pub async fn yafu_task(
         let expr = format!("factor({number})\n");
         if let Err(e) = yafu.stdin.write_all(expr.as_bytes()).await {
             let status = wait_for_status(&mut yafu.child).await;
-            if status.as_ref().map_or(false, is_sigill) {
+            if status.as_ref().is_some_and(is_sigill) {
                 error!(
                     "{id}: yafu process exited with SIGILL while writing stdin; aborting composite {id} ({number}) and restarting yafu"
                 );
@@ -253,7 +253,7 @@ pub async fn yafu_task(
         }
         if let Err(e) = yafu.stdin.flush().await {
             let status = wait_for_status(&mut yafu.child).await;
-            if status.as_ref().map_or(false, is_sigill) {
+            if status.as_ref().is_some_and(is_sigill) {
                 error!(
                     "{id}: yafu process exited with SIGILL while flushing stdin; aborting composite {id} ({number}) and restarting yafu"
                 );
@@ -326,7 +326,7 @@ pub async fn yafu_task(
                         }
                         Ok(None) => {
                             let status = wait_for_status(&mut yafu.child).await;
-                            if status.as_ref().map_or(false, is_sigill) {
+                            if status.as_ref().is_some_and(is_sigill) {
                                 error!(
                                     "{id}: yafu process exited with SIGILL while factoring composite {number}; aborting composite {id} and restarting yafu"
                                 );
@@ -338,7 +338,7 @@ pub async fn yafu_task(
                         }
                         Err(e) => {
                             let status = wait_for_status(&mut yafu.child).await;
-                            if status.as_ref().map_or(false, is_sigill) {
+                            if status.as_ref().is_some_and(is_sigill) {
                                 error!(
                                     "{id}: yafu process exited with SIGILL while factoring composite {number}; aborting composite {id} and restarting yafu"
                                 );
