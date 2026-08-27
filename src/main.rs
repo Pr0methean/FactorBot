@@ -454,8 +454,7 @@ async fn main() -> anyhow::Result<()> {
         };
         let exit_instant = now_instant + remaining_duration;
         if EXIT_TIME.set(exit_instant).is_ok() {
-            let remaining_secs = remaining_duration.as_secs();
-            info!("Set EXIT_TIME deadline to Unix timestamp {deadline_unix} ({remaining_secs}s remaining)");
+            info!("Set EXIT_TIME deadline to Unix timestamp {deadline_unix} ({remaining_duration:?} remaining)");
         }
     } else if std::env::var("CI").is_ok() {
         if EXIT_TIME.set(Instant::now().add(Duration::from_mins(355))).is_ok() {
