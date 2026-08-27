@@ -20,7 +20,7 @@ use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::algebraic::Factor;
 use crate::graph::EntryId;
 use crate::monitor::Monitor;
-use crate::net::{FactorDbClient, FactorDbClientReadIdsAndExprs, ResourceLimits};
+use crate::net::{FactorDbClient, FactorDbClientReadIdsAndExprs};
 use crate::yafu::{YafuWorkItem, YAFU_KILL_GRACE_PERIOD, YAFU_SENDER, yafu_task};
 use ahash::RandomState;
 use alloc::sync::Arc;
@@ -32,7 +32,7 @@ use futures_util::FutureExt;
 use hipstr::HipStr;
 use log::{error, info, warn};
 use net::NumberStatus::FullyFactored;
-use net::{CPU_TENTHS_SPENT_LAST_CHECK, RealFactorDbClient};
+use net::{RealFactorDbClient};
 use net::{NumberStatusExt, ProcessedStatusApiResponse};
 use quick_cache::UnitWeighter;
 use quick_cache::sync::{Cache, DefaultLifecycle};
@@ -50,10 +50,10 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::num::NonZeroU32;
 use std::ops::Add;
 use std::panic;
-use std::process::{abort, exit};
+use std::process::{abort};
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::{Acquire, Release};
+use std::sync::atomic::Ordering::{Release};
 use sysinfo::MemoryRefreshKind;
 use sysinfo::RefreshKind;
 use tokio::signal::ctrl_c;
@@ -303,84 +303,8 @@ async fn report_primality_proof(id: EntryId, parameter: &str, http: &impl Factor
         .await;
 }
 
-const MAX_BASES_BETWEEN_RESOURCE_CHECKS: usize = 254;
-
-const MIN_BASES_BETWEEN_RESOURCE_CHECKS: usize = 16;
-
 const MAX_CPU_BUDGET_TENTHS: usize = 6000;
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
-
-#[framed]
-async fn throttle_if_necessary(
-    http: &impl FactorDbClientReadIdsAndExprs,
-    c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
-    bases_before_next_cpu_check: &mut usize,
-    sleep_first: bool,
-    c_filter: &mut CuckooFilter<DefaultHasher>,
-) -> bool {
-    *bases_before_next_cpu_check -= 1;
-    if *bases_before_next_cpu_check != 0 {
-        return false;
-    }
-    if sleep_first {
-        composites_while_waiting(
-            Instant::now() + Duration::from_secs(10),
-            http,
-            c_receiver,
-            c_filter,
-        )
-        .await; // allow for delay in CPU accounting
-    }
-    // info!("Resources fetched");
-    let Some(ResourceLimits {
-        cpu_tenths_spent,
-        resets_at,
-    }) = http
-        .try_get_resource_limits(bases_before_next_cpu_check)
-        .await
-    else {
-        error!("Failed to parse resource limits");
-        return false;
-    };
-    let seconds_to_reset = resets_at
-        .saturating_duration_since(Instant::now())
-        .as_secs_f64();
-    let mut tenths_remaining = MAX_CPU_BUDGET_TENTHS.saturating_sub(cpu_tenths_spent);
-    if !NO_RESERVE.load(Acquire) {
-        tenths_remaining = tenths_remaining
-            .saturating_sub((seconds_to_reset * seconds_to_reset / 18000.0) as usize);
-    }
-    let mut bases_remaining = (tenths_remaining / 10).min(MAX_BASES_BETWEEN_RESOURCE_CHECKS);
-    if bases_remaining <= MIN_BASES_BETWEEN_RESOURCE_CHECKS {
-        warn!(
-            "CPU time spent this cycle: {:.1} seconds. Throttling {} seconds due to high server CPU usage",
-            cpu_tenths_spent as f64 * 0.1,
-            seconds_to_reset
-        );
-        if EXIT_TIME
-            .get()
-            .is_some_and(|exit_time| *exit_time <= resets_at)
-        {
-            warn!("Throttling won't end before program exit; exiting now");
-            exit(0);
-        }
-        composites_while_waiting(resets_at, http, c_receiver, c_filter).await;
-        *bases_before_next_cpu_check = MAX_BASES_BETWEEN_RESOURCE_CHECKS;
-        CPU_TENTHS_SPENT_LAST_CHECK.store(0, Release);
-    } else {
-        if bases_remaining < MIN_BASES_BETWEEN_RESOURCE_CHECKS {
-            bases_remaining = MIN_BASES_BETWEEN_RESOURCE_CHECKS;
-        }
-        info!(
-            "CPU time spent this cycle: {:.1} seconds; reset in {} seconds; checking again after {} bases",
-            cpu_tenths_spent as f64 * 0.1,
-            seconds_to_reset as usize,
-            bases_remaining
-        );
-        *bases_before_next_cpu_check = bases_remaining;
-    }
-    true
-}
 
 const STATS_INTERVAL: Duration = Duration::from_mins(1);
 

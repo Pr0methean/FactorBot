@@ -1652,12 +1652,11 @@ pub mod tests {
         let mut http = MockFactorDbClient::new();
         http.expect_known_factors_as_digits().never();
         http.expect_cached_factors().return_const(None);
-        http.expect_parse_resource_limits().never();
+        http.expect_wait_if_resource_limited().never();
         http.expect_report_numeric_factor().never();
         http.expect_retrying_get_and_decode().never();
         http.expect_try_get_and_decode().never();
         http.expect_try_get_expression_form().never();
-        http.expect_try_get_resource_limits().never();
         http.expect_try_report_factor().never();
 
         let mut data = FactorData::default();
@@ -1698,12 +1697,11 @@ pub mod tests {
         let mut http = MockFactorDbClient::new();
         http.expect_known_factors_as_digits().never();
         http.expect_cached_factors().return_const(None);
-        http.expect_parse_resource_limits().never();
+        http.expect_wait_if_resource_limited().never();
         http.expect_report_numeric_factor().never();
         http.expect_retrying_get_and_decode().never();
         http.expect_try_get_and_decode().never();
         http.expect_try_get_expression_form().never();
-        http.expect_try_get_resource_limits().never();
         http.expect_try_report_factor().never();
 
         const LARGE_PRIME: NumericFactor = 340282366920938463463374607431768211297; // last prime below 2^128
@@ -1799,12 +1797,11 @@ pub mod tests {
         let mut http = MockFactorDbClient::new();
         http.expect_known_factors_as_digits().never();
         http.expect_cached_factors().return_const(None);
-        http.expect_parse_resource_limits().never();
+        http.expect_wait_if_resource_limited().never();
         http.expect_report_numeric_factor().never();
         http.expect_retrying_get_and_decode().never();
         http.expect_try_get_and_decode().never();
         http.expect_try_get_expression_form().never();
-        http.expect_try_get_resource_limits().never();
         http.expect_try_report_factor().never();
 
         let mut data = FactorData::default();
