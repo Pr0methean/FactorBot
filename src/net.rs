@@ -606,7 +606,7 @@ impl FactorDbClient for RealFactorDbClient {
                 } else if text.contains("Does not divide") {
                     DoesNotDivide
                 } else {
-                    let _ = self.wait_if_resource_limited(&text);
+                    self.wait_if_resource_limited(&text).await;
                     OtherError
                 }
             }

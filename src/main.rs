@@ -4,6 +4,7 @@
 #![feature(exact_div)]
 #![feature(explicit_tail_calls)]
 #![feature(never_type)]
+#![recursion_limit = "256"]
 use tokio_stream::StreamExt;
 extern crate alloc;
 extern crate core;
