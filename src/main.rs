@@ -55,6 +55,7 @@ use std::process::{abort};
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Release};
+use std::time::SystemTime;
 use sysinfo::MemoryRefreshKind;
 use sysinfo::RefreshKind;
 use tokio::signal::ctrl_c;
@@ -357,7 +358,9 @@ async fn main() -> anyhow::Result<()> {
         (sigint, tokio_stream::pending::<()>())
     });
 
-    let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
+    let is_no_reserve = std::env::var("NO_RESERVE")
+        .map(|v| !v.is_empty() && v != "0" && v != "false")
+        .unwrap_or(false);
     NO_RESERVE.store(is_no_reserve, Release);
     let mut c_digits = std::env::var("C_DIGITS")
         .ok()
@@ -371,8 +374,9 @@ async fn main() -> anyhow::Result<()> {
     let mut prp_digits = std::env::var("PRP_DIGITS")
         .ok()
         .and_then(|s| s.parse::<NumberLength>().ok());
-    if let Ok(run_number) = std::env::var("RUN") {
-        let mut run_number = run_number.parse::<EntryId>()?;
+    if let Ok(run_str) = std::env::var("RUN")
+        && let Ok(mut run_number) = run_str.parse::<EntryId>()
+    {
         if let Ok(sub_run_number) = std::env::var("SUB_RUN")
                 && let Ok(sub_run_number) = sub_run_number.parse::<EntryId>() {
             run_number += 149993 * (11 + sub_run_number);
@@ -437,8 +441,21 @@ async fn main() -> anyhow::Result<()> {
     let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
     let (c_sender, c_raw_receiver) = channel(C_TASK_BUFFER_SIZE);
     let mut c_receiver = PushbackReceiver::new(c_raw_receiver, &c_sender);
-    if std::env::var("CI").is_ok() {
-        EXIT_TIME.set(Instant::now().add(Duration::from_mins(355)))?;
+    let deadline_val = std::env::var("DEADLINE").ok();
+    if let Some(deadline_str) = deadline_val
+        && let Ok(deadline_unix) = deadline_str.parse::<u64>()
+    {
+        let now = Instant::now();
+        let unix_epoch_instant = now - (SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap());
+        let exit_instant = unix_epoch_instant + Duration::from_secs(deadline_unix);
+        let remaining_secs = exit_instant.duration_since(now).as_secs();
+        if EXIT_TIME.set(exit_instant).is_ok() {
+            info!("Set EXIT_TIME deadline to Unix timestamp {deadline_unix} ({remaining_secs}s remaining)");
+        }
+    } else if std::env::var("CI").is_ok() {
+        if EXIT_TIME.set(Instant::now().add(Duration::from_mins(355))).is_ok() {
+            warn!("Set EXIT_TIME using fallback for CI (355m)");
+        }
     }
     let http = Arc::new(RealFactorDbClient::new(rph_limit));
     // Spawn the yafu factoring task. The channel is bounded so that backpressure
@@ -1008,6 +1025,25 @@ pub enum ReportFactorResult {
     DoesNotDivide,
     AlreadyFullyFactored,
     OtherError,
+}
+
+#[cfg(test)]
+mod main_tests {
+    use std::time::Duration;
+    use tokio::time::Instant;
+
+    #[test]
+    fn test_deadline_calculation() {
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let deadline_unix = now_unix + 21540;
+        let remaining_secs = deadline_unix.saturating_sub(now_unix);
+        assert_eq!(remaining_secs, 21540);
+        let exit_instant = Instant::now() + Duration::from_secs(remaining_secs);
+        assert!(exit_instant > Instant::now());
+    }
 }
 
 const MAX_ID_EQUAL_TO_VALUE: EntryId = 999_999_999_999_999_999;

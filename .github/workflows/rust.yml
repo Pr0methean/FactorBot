@@ -43,27 +43,27 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Calculate deadline
+        id: set_deadline
+        run: |
+          DEADLINE=$(($(date +%s) + 21540))
+          echo "deadline=$DEADLINE" >> $GITHUB_OUTPUT
+          echo "Deadline Unix timestamp: $DEADLINE"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # Needed for git-restore-mtime-action
       - name: Restore timestamps # Prevents an unnecessary rebuild
         uses: chetan/git-restore-mtime-action@v2
-      - name: Let tar run as root
-        run: sudo chown root /bin/tar && sudo chmod u+s /bin/tar
-      - name: Install rust toolchain
-        run: |
-          rustup install nightly
-          rustup default nightly
-      - name: Cache cargo registry/git and target
+      - name: Cache Cargo dependencies
         uses: actions/cache@v6
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            ~/.cargo
             target
-          # Include Cargo.lock and Cargo.toml hashes so the cache invalidates on dependency/source changes.
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}-${{ runner.toolcache }}
-          restore-keys: ${{ runner.os }}-cargo-
+            Cargo.lock
+          key: cargo-${{ hashFiles('.github/workflows/rust.yml', '**/Cargo.toml') }}
+          restore-keys: |
+            cargo-
       - name: Cache apt/dpkg
         uses: actions/cache@v6
         with:
@@ -73,24 +73,31 @@ jobs:
             /var/cache/apt/archives/*.deb
             /var/lib/dpkg/status
           key: dpkg-ecm-2025-11-17
-      - name: Build
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Build while installing runtime dependencies
         run: |
           (
-          mkfifo composites
-          sudo apt-get install libecm-dev gmp-ecm
+            sudo apt-get update
+            sudo apt-get install -y libecm-dev gmp-ecm
           ) &
-          apt_pid=$!
-          # Use the same wrapper for the nightly build; rustup respects RUSTC_WRAPPER
-          cargo +nightly build --release
-          wait ${apt_pid}
+          ./build.sh
       - name: Run
+        env:
+          DEADLINE: ${{ steps.set_deadline.outputs.deadline }}
+          RUN: ${{ github.run_number }}
+          SUB_RUN: ${{ inputs.sub_run_id }}
+          C_DIGITS: ${{ inputs.c_digits }}
+          U_DIGITS: ${{ inputs.u_digits }}
+          PRP_DIGITS: ${{ inputs.prp_digits }}
+          PRP_START: ${{ inputs.prp_start }}
+          NO_RESERVE: 1
         run: |
           set -x
           if [ "${{github.event_name}}" == "push" ]; then
             export RUST_BACKTRACE=full
           fi
-          # RUSTFLAGS is set at job level so builds are reproducible across the steps and match the cached artifacts.
-          NO_RESERVE=1 RUN=${{github.run_number}} timeout 355m nice -+19 ./target/release/FactorBot
+          ./target/release/FactorBot "${{ steps.set_deadline.outputs.deadline }}"
       - name: Upload any failed submissions
         if: always()
         uses: actions/upload-artifact@v7
