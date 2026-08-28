@@ -66,7 +66,7 @@ jobs:
       - name: Detect native CPU target
         id: get_target_cpu
         run: |
-          target_cpu=$(rustc --print target-cpus | grep native | grep -o 'currently .*)' | grep -o '[A-Za-z0-9-_]*)$')
+          target_cpu=$(rustc --print target-cpus | grep native | grep -o 'currently .*)' | grep -o '[A-Za-z0-9_-]*)$')
           echo "target_cpu=${target_cpu::-1}" >> $GITHUB_OUTPUT
       - name: Cache Cargo dependencies
         uses: actions/cache@v6
