@@ -46,7 +46,7 @@ jobs:
       - name: Calculate deadline
         id: set_deadline
         run: |
-          DEADLINE=$(($(date +%s) + 21540))
+          DEADLINE=$(($(date +%s) + 21300))
           echo "deadline=$DEADLINE" >> $GITHUB_OUTPUT
           echo "Deadline Unix timestamp: $DEADLINE"
       - uses: actions/checkout@v7
