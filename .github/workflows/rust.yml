@@ -46,7 +46,7 @@ jobs:
       - name: Calculate deadline
         id: set_deadline
         run: |
-          DEADLINE=$(($(date +%s) + 21540))
+          DEADLINE=$(($(date +%s) + 21300))
           echo "deadline=$DEADLINE" >> $GITHUB_OUTPUT
           echo "Deadline Unix timestamp: $DEADLINE"
       - uses: actions/checkout@v7
@@ -54,16 +54,6 @@ jobs:
           fetch-depth: 0 # Needed for git-restore-mtime-action
       - name: Restore timestamps # Prevents an unnecessary rebuild
         uses: chetan/git-restore-mtime-action@v2
-      - name: Cache Cargo dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo
-            target
-            Cargo.lock
-          key: cargo-${{ hashFiles('.github/workflows/rust.yml', '**/Cargo.toml') }}
-          restore-keys: |
-            cargo-
       - name: Cache apt/dpkg
         uses: actions/cache@v6
         with:
@@ -73,6 +63,21 @@ jobs:
             /var/cache/apt/archives/*.deb
             /var/lib/dpkg/status
           key: dpkg-ecm-2025-11-17
+      - name: Detect native CPU target
+        id: get_target_cpu
+        run: |
+          target_cpu=$(rustc --print target-cpus | grep native | grep -o 'currently .*)' | grep -o '[A-Za-z0-9_-]*)$')
+          echo "target_cpu=${target_cpu::-1}" >> $GITHUB_OUTPUT
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo
+            target
+            Cargo.lock
+          key: cargo-${{ steps.get_target_cpu.outputs.target_cpu }}-${{ hashFiles('.github/workflows/rust.yml', '**/Cargo.toml') }}
+          restore-keys: |
+            cargo-${{ steps.get_target_cpu.outputs.target_cpu }}-
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@nightly
       - name: Build while installing runtime dependencies
