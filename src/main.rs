@@ -125,7 +125,7 @@ const C_MAX_DIGITS: NumberLength = 300;
 
 const U_MIN_DIGITS: NumberLength = 2001;
 const U_MAX_DIGITS: NumberLength = 199_999;
-const SUBMIT_FACTOR_MAX_ATTEMPTS: usize = 3;
+const SUBMIT_FACTOR_MAX_ATTEMPTS: usize = 2;
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 pub(crate) static FAILED_U_SUBMISSIONS_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
 
