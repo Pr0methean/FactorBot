@@ -38,7 +38,7 @@ async-backtrace = { git = "https://github.com/Pr0methean/async-backtrace.git", b
 hipstr = { version = "0.8", default-features = false, features = ["serde"] }
 futures-util = "0.3"
 peg = "0.8"
-yamaquasi = { git = "https://github.com/remyoudompheng/yamaquasi.git" }
+yamaquasi = { git = "https://github.com/Pr0methean/yamaquasi.git" }
 derivative = "2.2"
 ahash = "0.8"
 sysinfo = "0.39"
