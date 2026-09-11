@@ -75,6 +75,7 @@ impl Monitor {
                 _ = sleep_until(soft_deadline) => {
                     // Broadcast the shutdown signal so all other Monitor
                     // clones are also notified.
+                    warn!("Sending shutdown signal because soft deadline reached");
                     let _ = self.shutdown_sender.send(());
                     if let Some(hard_deadline) = HARD_DEADLINE.get() {
                         tokio::spawn(async move {
