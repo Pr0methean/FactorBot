@@ -126,7 +126,8 @@ const C_MAX_DIGITS: NumberLength = 300;
 const U_MIN_DIGITS: NumberLength = 2001;
 const U_MAX_DIGITS: NumberLength = 199_999;
 const SUBMIT_FACTOR_MAX_ATTEMPTS: usize = 2;
-static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
+static SOFT_DEADLINE: OnceCell<Instant> = OnceCell::const_new();
+static HARD_DEADLINE: OnceCell<Instant> = OnceCell::const_new();
 pub(crate) static FAILED_U_SUBMISSIONS_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
 
 #[derive(Clone, Debug, Eq)]
@@ -341,24 +342,23 @@ async fn main() -> anyhow::Result<()> {
     let mut sys = sysinfo::System::new_with_specifics(
         RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()),
     );
-    let deadline_val = std::env::var("DEADLINE").ok();
+    let deadline_val = std::env::var("SOFT_DEADLINE").ok();
     if let Some(deadline_str) = deadline_val
         && let Ok(deadline_unix) = deadline_str.parse::<u64>()
     {
-        let exit_system_time = SystemTime::UNIX_EPOCH + Duration::from_secs(deadline_unix);
-        let now_instant = Instant::now();
-        let now_system_time = SystemTime::now();
-        let Ok(remaining_duration) = exit_system_time.duration_since(now_system_time) else {
-            error!("Deadline has already passed");
-            exit(0);
-        };
-        let exit_instant = now_instant + remaining_duration;
-        if EXIT_TIME.set(exit_instant).is_ok() {
-            info!("Set EXIT_TIME deadline to Unix timestamp {deadline_unix} ({remaining_duration:?} remaining)");
-        }
+        convert_deadline(deadline_unix, &SOFT_DEADLINE);
     } else if std::env::var("CI").is_ok()
-        && EXIT_TIME.set(Instant::now().add(Duration::from_mins(355))).is_ok() {
-            warn!("Set EXIT_TIME using fallback for CI (355m)");
+        && SOFT_DEADLINE.set(Instant::now().add(Duration::from_hours(5))).is_ok() {
+            warn!("Set SOFT_DEADLINE using fallback for CI (5h)");
+        }
+    let deadline_val = std::env::var("HARD_DEADLINE").ok();
+    if let Some(deadline_str) = deadline_val
+        && let Ok(deadline_unix) = deadline_str.parse::<u64>()
+    {
+        convert_deadline(deadline_unix, &HARD_DEADLINE);
+    } else if std::env::var("CI").is_ok()
+        && HARD_DEADLINE.set(Instant::now().add(Duration::from_mins(355))).is_ok() {
+            warn!("Set HARD_DEADLINE using fallback for CI (5h55m)");
         }
     let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
     simple_log::console("info,reqwest=debug").unwrap();
@@ -1017,6 +1017,20 @@ async fn main() -> anyhow::Result<()> {
             _ = sleep(YAFU_KILL_GRACE_PERIOD) => warn!("yafu_task did not finish within grace period"),
         }
         Ok(())
+    }
+}
+
+fn convert_deadline(deadline_unix: u64, destination: &OnceCell<Instant>) {
+    let exit_system_time = SystemTime::UNIX_EPOCH + Duration::from_secs(deadline_unix);
+    let now_instant = Instant::now();
+    let now_system_time = SystemTime::now();
+    let Ok(remaining_duration) = exit_system_time.duration_since(now_system_time) else {
+        error!("Deadline has already passed");
+        exit(0);
+    };
+    let exit_instant = now_instant + remaining_duration;
+    if destination.set(exit_instant).is_ok() {
+        info!("Set EXIT_TIME deadline to Unix timestamp {deadline_unix} ({remaining_duration:?} remaining)");
     }
 }
 

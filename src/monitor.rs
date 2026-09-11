@@ -1,13 +1,15 @@
 // Adapted from: https://github.com/tokio-rs/mini-redis/blob/e186482ca00f8d884ddcbe20417f3654d03315a4/src/shutdown.rs
 
+use std::process::exit;
 use async_backtrace::framed;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
+use log::warn;
 use tokio::sync::broadcast::{Receiver, Sender, channel};
 use tokio::time::sleep_until;
 
-use crate::EXIT_TIME;
+use crate::{HARD_DEADLINE, SOFT_DEADLINE};
 
 /// Shutdown is signalled using a `broadcast::Receiver`. Only a single value is
 /// ever sent. Once a value has been sent via the broadcast channel, the server
@@ -65,15 +67,22 @@ impl Monitor {
             return;
         }
 
-        if let Some(&exit_time) = EXIT_TIME.get() {
+        if let Some(&soft_deadline) = SOFT_DEADLINE.get() {
             // Race between the broadcast channel and the EXIT_TIME deadline.
             // Cannot receive a "lag error" as only one value is ever sent.
             tokio::select! {
                 _ = self.shutdown_notify.recv() => {}
-                _ = sleep_until(exit_time) => {
+                _ = sleep_until(soft_deadline) => {
                     // Broadcast the shutdown signal so all other Monitor
                     // clones are also notified.
                     let _ = self.shutdown_sender.send(());
+                    if let Some(hard_deadline) = HARD_DEADLINE.get() {
+                        tokio::spawn(async move {
+                            sleep_until(*hard_deadline).await;
+                            warn!("Exiting because hard deadline reached");
+                            exit(0);
+                        });
+                    }
                 }
             }
         } else {

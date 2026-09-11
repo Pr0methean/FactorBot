@@ -4,9 +4,9 @@ use crate::algebraic::Factor::Numeric;
 use crate::algebraic::{NumericFactor, find_factors_of_numeric, get_numeric_value_cache};
 use crate::graph::EntryId;
 use crate::net::NumberStatus::{FullyFactored, Invalid, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown};
-use crate::{BasicCache, get_from_cache};
+use crate::{BasicCache, get_from_cache, HARD_DEADLINE};
 use crate::{
-    EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
+    FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
     MAX_ID_EQUAL_TO_VALUE, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS, create_cache,
 };
 use crate::{Factor, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
@@ -281,7 +281,7 @@ impl FactorDbClient for RealFactorDbClient {
         let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60
             + seconds_within_minute_to_reset.parse::<u64>().unwrap();
         let resets_at = now + Duration::from_secs(seconds_to_reset);
-        if EXIT_TIME
+        if HARD_DEADLINE
             .get()
             .is_some_and(|exit_time| exit_time <= &resets_at)
         {
