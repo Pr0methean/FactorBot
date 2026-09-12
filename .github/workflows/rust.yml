@@ -46,9 +46,12 @@ jobs:
       - name: Calculate deadline
         id: set_deadline
         run: |
-          DEADLINE=$(($(date +%s) + 18000)) # 5 hours
-          echo "deadline=$DEADLINE" >> $GITHUB_OUTPUT
-          echo "Deadline Unix timestamp: $DEADLINE"
+          SOFT_DEADLINE=$(($(date +%s) + 18000)) # 5h00m
+          HARD_DEADLINE=$(($(date +%s) + 21540)) # 5h59m
+          echo "soft_deadline=$SOFT_DEADLINE" >> $GITHUB_OUTPUT
+          echo "hard_deadline=$HARD_DEADLINE" >> $GITHUB_OUTPUT
+          echo "Soft deadline Unix timestamp: $SOFT_DEADLINE"
+          echo "Hard deadline Unix timestamp: $HARD_DEADLINE"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # Needed for git-restore-mtime-action
@@ -89,7 +92,8 @@ jobs:
           ./build.sh
       - name: Run
         env:
-          DEADLINE: ${{ steps.set_deadline.outputs.deadline }}
+          SOFT_DEADLINE: ${{ steps.set_deadline.outputs.soft_deadline }}
+          HARD_DEADLINE: ${{ steps.set_deadline.outputs.hard_deadline }}
           RUN: ${{ github.run_number }}
           SUB_RUN: ${{ inputs.sub_run_id }}
           C_DIGITS: ${{ inputs.c_digits }}
@@ -102,7 +106,7 @@ jobs:
           if [ "${{github.event_name}}" == "push" ]; then
             export RUST_BACKTRACE=full
           fi
-          ./target/release/FactorBot "${{ steps.set_deadline.outputs.deadline }}"
+          ./target/release/FactorBot
       - name: Upload any failed submissions
         if: always()
         uses: actions/upload-artifact@v7
