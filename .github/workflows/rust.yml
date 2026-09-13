@@ -76,6 +76,11 @@ jobs:
           fi
           echo "target_cpu=$target_cpu" >> $GITHUB_OUTPUT
           echo "Detected CPU: $target_cpu"
+      - name: Detect CPU capabilities
+        id: cpu_caps
+        run: |
+          FLAGS=$(cat /proc/cpuinfo | grep flags | head -1 | md5sum | cut -d' ' -f1)
+          echo "cpu_flags=$FLAGS" >> $GITHUB_OUTPUT
       - name: Cache Cargo dependencies
         uses: actions/cache@v6
         with:
@@ -83,9 +88,9 @@ jobs:
             ~/.cargo
             target
             Cargo.lock
-          key: cargo-${{ steps.get_target_cpu.outputs.target_cpu }}-${{ hashFiles('.github/workflows/rust.yml', '**/Cargo.toml') }}
+          key: cargo-${{ steps.get_target_cpu.outputs.target_cpu }}-${{ steps.cpu_caps.outputs.cpu_flags }}-${{ hashFiles('.github/workflows/rust.yml', '**/Cargo.toml') }}
           restore-keys: |
-            cargo-${{ steps.get_target_cpu.outputs.target_cpu }}-
+            cargo-${{ steps.get_target_cpu.outputs.target_cpu }}-${{ steps.cpu_caps.outputs.cpu_flags }}-
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@nightly
       - name: Build while installing runtime dependencies
