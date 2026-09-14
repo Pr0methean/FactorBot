@@ -23,6 +23,7 @@ use tokio::sync::OnceCell;
 use tokio::sync::mpsc::Receiver;
 use tokio::task;
 use tokio::time::{Duration, Instant, sleep};
+use yamaquasi::arith::Num;
 
 pub static YAFU_SENDER: OnceCell<tokio::sync::mpsc::Sender<YafuWorkItem>> = OnceCell::const_new();
 
@@ -158,11 +159,12 @@ pub async fn yafu_task(
         }
     };
 
-    // A test of C93's on 2026-09-13 suggests that those with indices 0 to 50,004 are much less
-    // likely than those with indices 75,000 and up to have a factor smaller than x digits
-    // (0/10 vs 8/10) for all x from 27 through 35.
-    // TODO: check this for other digit lengths, and whether it continues to hold over time.
+    // As of 2026-09-13, proportion with largest factor > 27 digits:
+    // Index   0..=4   50000..=50004  75000..=75004  100000..=100004
+    // C93         5               5              0                2
+    // C94         5               1              ?                1
     const MAX_INDEX_WITHIN_LENGTH_UNLIKELY_ECMABLE: EntryId = 50_004;
+    const MAX_LENGTH_UNLIKELY_ECMABLE: NumberLength = 93;
 
     loop {
         if persistent_yafu.is_none() && !shutdown_received {
@@ -244,7 +246,7 @@ pub async fn yafu_task(
             item.lower_bound, item.upper_bound
         );
         let start = Instant::now();
-        let expr = if item.index_within_length > MAX_INDEX_WITHIN_LENGTH_UNLIKELY_ECMABLE {
+        let expr = if item.lower_bound > MAX_LENGTH_UNLIKELY_ECMABLE || item.index_within_length > MAX_INDEX_WITHIN_LENGTH_UNLIKELY_ECMABLE {
             format!("factor({number})\n")
         } else {
             format!("nfs({number})\n")
