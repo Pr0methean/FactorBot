@@ -158,12 +158,11 @@ pub async fn yafu_task(
         }
     };
 
-    // A test of C93's on 2026-09-13 suggests that those with indices 0 to 50,009 are much less
-    // likely than those with indices 75,010 and up to have a factor smaller than x digits
+    // A test of C93's on 2026-09-13 suggests that those with indices 0 to 50,004 are much less
+    // likely than those with indices 75,000 and up to have a factor smaller than x digits
     // (0/10 vs 8/10) for all x from 27 through 35.
     // TODO: check this for other digit lengths, and whether it continues to hold over time.
-    const MAX_INDEX_WITHIN_LENGTH_UNLIKELY_ECMABLE: EntryId = 50_009;
-    const MAX_SIQS_LENGTH: NumberLength = 96;
+    const MAX_INDEX_WITHIN_LENGTH_UNLIKELY_ECMABLE: EntryId = 50_004;
 
     loop {
         if persistent_yafu.is_none() && !shutdown_received {
@@ -245,10 +244,10 @@ pub async fn yafu_task(
             item.lower_bound, item.upper_bound
         );
         let start = Instant::now();
-        let expr = if item.upper_bound > MAX_SIQS_LENGTH || item.index_within_length > MAX_INDEX_WITHIN_LENGTH_UNLIKELY_ECMABLE {
+        let expr = if item.index_within_length > MAX_INDEX_WITHIN_LENGTH_UNLIKELY_ECMABLE {
             format!("factor({number})\n")
         } else {
-            format!("siqs({number})\n")
+            format!("nfs({number})\n")
         };
         if let Err(e) = yafu.stdin.write_all(expr.as_bytes()).await {
             let status = wait_for_status(&mut yafu.child).await;
