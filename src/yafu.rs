@@ -239,7 +239,7 @@ pub async fn yafu_task(
         let expr = if item.upper_bound > 93 {
             format!("factor({number})\n")
         } else {
-            format!("mpqs({number})\n")
+            format!("siqs({number})\n")
         };
         if let Err(e) = yafu.stdin.write_all(expr.as_bytes()).await {
             let status = wait_for_status(&mut yafu.child).await;
