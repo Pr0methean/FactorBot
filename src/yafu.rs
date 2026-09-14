@@ -159,13 +159,6 @@ pub async fn yafu_task(
         }
     };
 
-    // As of 2026-09-13, proportion with largest factor > 27 digits:
-    // Index   0..=4   50000..=50004  75000..=75004  100000..=100004
-    // C93         5               5              0                2
-    // C94         5               1              ?                1
-    const MAX_INDEX_WITHIN_LENGTH_UNLIKELY_ECMABLE: EntryId = 50_004;
-    const MAX_LENGTH_UNLIKELY_ECMABLE: NumberLength = 93;
-
     loop {
         if persistent_yafu.is_none() && !shutdown_received {
             match PersistentYafu::spawn().await {
@@ -246,10 +239,17 @@ pub async fn yafu_task(
             item.lower_bound, item.upper_bound
         );
         let start = Instant::now();
-        let expr = if item.lower_bound > MAX_LENGTH_UNLIKELY_ECMABLE || item.index_within_length > MAX_INDEX_WITHIN_LENGTH_UNLIKELY_ECMABLE {
-            format!("factor({number})\n")
-        } else {
+        // As of 2026-09-13, proportion with largest factor >= 28 digits:
+        // Order read  1              5              3              4                2
+        // Index   0..=4  25000..=25004  50000..=50004  75000..=75004  100000..=100004
+        // C93         5              5              5              0                2
+        // C94         5              5              1              3                1
+        let expr = if item.upper_bound <= 93 && item.index_within_length <= 50000 {
             format!("nfs({number})\n")
+        } else if item.upper_bound <= 94 && item.index_within_length <= 25000 {
+            format!("nfs({number})\n")
+        } else {
+            format!("factor({number})\n")
         };
         if let Err(e) = yafu.stdin.write_all(expr.as_bytes()).await {
             let status = wait_for_status(&mut yafu.child).await;
