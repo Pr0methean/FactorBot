@@ -40,6 +40,7 @@ pub struct YafuWorkItem {
     pub number: HipStr<'static>,
     pub lower_bound: NumberLength,
     pub upper_bound: NumberLength,
+    pub index_within_length: EntryId,
 }
 
 impl Ord for YafuWorkItem {
@@ -48,6 +49,7 @@ impl Ord for YafuWorkItem {
             .upper_bound
             .cmp(&self.upper_bound)
             .then_with(|| other.lower_bound.cmp(&self.lower_bound))
+            .then_with(|| other.index_within_length.cmp(&self.index_within_length))
             .then_with(|| other.id.cmp(&self.id))
     }
 }
@@ -156,6 +158,13 @@ pub async fn yafu_task(
         }
     };
 
+    // A test of C93's on 2026-09-13 suggests that those with indices 0 to 50,009 are much less
+    // likely than those with indices 75,010 and up to have a factor smaller than x digits
+    // (0/10 vs 8/10) for all x from 27 through 35.
+    // TODO: check this for other digit lengths, and whether it continues to hold over time.
+    const MAX_INDEX_WITHIN_LENGTH_UNLIKELY_ECMABLE: EntryId = 50_009;
+    const MAX_SIQS_LENGTH: NumberLength = 96;
+
     loop {
         if persistent_yafu.is_none() && !shutdown_received {
             match PersistentYafu::spawn().await {
@@ -236,7 +245,7 @@ pub async fn yafu_task(
             item.lower_bound, item.upper_bound
         );
         let start = Instant::now();
-        let expr = if item.upper_bound > 93 {
+        let expr = if item.upper_bound > MAX_SIQS_LENGTH || item.index_within_length > MAX_INDEX_WITHIN_LENGTH_UNLIKELY_ECMABLE {
             format!("factor({number})\n")
         } else {
             format!("siqs({number})\n")

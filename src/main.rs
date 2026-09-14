@@ -134,6 +134,7 @@ pub(crate) static FAILED_U_SUBMISSIONS_OUT: OnceCell<Mutex<File>> = OnceCell::co
 struct CompositeCheckTask {
     id: EntryId,
     digits_or_expr: HipStr<'static>,
+    index_within_length: EntryId,
 }
 
 impl PartialEq<Self> for CompositeCheckTask {
@@ -176,13 +177,13 @@ async fn composites_while_waiting(
     };
     info!("Processing composites for {remaining:?} while other work is waiting");
     loop {
-        let Ok((CompositeCheckTask { id, digits_or_expr }, return_permit)) =
+        let Ok((CompositeCheckTask { id, digits_or_expr, index_within_length }, return_permit )) =
             timeout(remaining, c_receiver.recv()).await
         else {
             warn!("Timed out waiting for a composite number to check");
             return;
         };
-        check_composite(http, c_filter, id, digits_or_expr, return_permit).await;
+        check_composite(http, c_filter, id, digits_or_expr, return_permit, index_within_length).await;
         match end.checked_duration_since(Instant::now()) {
             None => {
                 info!("Out of time while processing composites");
@@ -200,6 +201,7 @@ async fn check_composite(
     id: EntryId,
     digits_or_expr: HipStr<'static>,
     return_permit: OwnedPermit<CompositeCheckTask>,
+    index_within_length: EntryId,
 ) -> bool {
     if c_filter.contains(&id) {
         info!("{id}: Skipping duplicate C");
@@ -224,7 +226,7 @@ async fn check_composite(
             warn!("{id}: Already fully factored");
             true
         } else {
-            return_permit.send(CompositeCheckTask { id, digits_or_expr });
+            return_permit.send(CompositeCheckTask { id, digits_or_expr, index_within_length });
             info!("{id}: Requeued C");
             false
         }
@@ -246,6 +248,7 @@ async fn check_composite(
                         number: number_str,
                         lower_bound,
                         upper_bound,
+                        index_within_length
                     };
                     match sender.send(item).await {
                         Ok(()) => {
@@ -258,7 +261,7 @@ async fn check_composite(
             }
         }
         if !dispatched && !checks_triggered && !factors_submitted {
-            return_permit.send(CompositeCheckTask { id, digits_or_expr });
+            return_permit.send(CompositeCheckTask { id, digits_or_expr, index_within_length });
             info!("{id}: Requeued C");
             false
         } else {
@@ -690,9 +693,9 @@ async fn main() -> anyhow::Result<()> {
                 }
 
                 c_task = c_receiver.recv() => {
-                    let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
+                    let (CompositeCheckTask {id, digits_or_expr, index_within_length}, return_permit) = c_task;
                     info!("{id}: Ready to check a C");
-                    check_composite(check_c_and_prp_http.as_ref(), &mut c_filter, id, digits_or_expr, return_permit).await;
+                    check_composite(check_c_and_prp_http.as_ref(), &mut c_filter, id, digits_or_expr, return_permit, index_within_length).await;
                 }
             }
         }
@@ -916,9 +919,11 @@ async fn main() -> anyhow::Result<()> {
                             info!("{results_per_page} C search results retrieved");
                             c_tasks.extend(c_http
                                 .read_ids_and_exprs(&composites_page.unwrap())
-                                .map(|(id, expr)| CompositeCheckTask {
+                                .zip(start..)
+                                .map(|((id, expr), index_within_length)| CompositeCheckTask {
                                     id,
                                     digits_or_expr: expr.into(),
+                                    index_within_length
                                 }));
                             c_tasks.shuffle(&mut rng());
                         }
