@@ -23,6 +23,7 @@ use tokio::sync::OnceCell;
 use tokio::sync::mpsc::Receiver;
 use tokio::task;
 use tokio::time::{Duration, Instant, sleep};
+use yamaquasi::arith::Num;
 
 pub static YAFU_SENDER: OnceCell<tokio::sync::mpsc::Sender<YafuWorkItem>> = OnceCell::const_new();
 
@@ -40,6 +41,7 @@ pub struct YafuWorkItem {
     pub number: HipStr<'static>,
     pub lower_bound: NumberLength,
     pub upper_bound: NumberLength,
+    pub index_within_length: EntryId,
 }
 
 impl Ord for YafuWorkItem {
@@ -48,6 +50,7 @@ impl Ord for YafuWorkItem {
             .upper_bound
             .cmp(&self.upper_bound)
             .then_with(|| other.lower_bound.cmp(&self.lower_bound))
+            .then_with(|| other.index_within_length.cmp(&self.index_within_length))
             .then_with(|| other.id.cmp(&self.id))
     }
 }
@@ -236,10 +239,17 @@ pub async fn yafu_task(
             item.lower_bound, item.upper_bound
         );
         let start = Instant::now();
-        let expr = if item.upper_bound > 93 {
-            format!("factor({number})\n")
+        // As of 2026-09-13, proportion with largest factor >= 28 digits:
+        // Order read  1              5              3              4                2
+        // Index   0..=4  25000..=25004  50000..=50004  75000..=75004  100000..=100004
+        // C93         5              5              5              0                2
+        // C94         5              5              1              3                1
+        let expr = if item.upper_bound <= 93 && item.index_within_length <= 50000 {
+            format!("nfs({number})\n")
+        } else if item.upper_bound <= 94 && item.index_within_length <= 25000 {
+            format!("nfs({number})\n")
         } else {
-            format!("mpqs({number})\n")
+            format!("factor({number})\n")
         };
         if let Err(e) = yafu.stdin.write_all(expr.as_bytes()).await {
             let status = wait_for_status(&mut yafu.child).await;
