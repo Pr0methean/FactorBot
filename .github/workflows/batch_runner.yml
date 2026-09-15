@@ -1,4 +1,4 @@
-name: Schedule Batch of Rust Runs
+name: Rust Batch
 permissions:
   contents: read
 on:
@@ -8,6 +8,9 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+concurrency:
+  group: batch-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   rust_00:
     uses: ./.github/workflows/rust.yml
@@ -82,6 +85,16 @@ jobs:
     with:
       sub_run_id: 17
   rust_18:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 18
+  rust_19:
+    if: github.event.schedule != ''
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 18
+  rust_20:
+    if: github.event.schedule != ''
     uses: ./.github/workflows/rust.yml
     with:
       sub_run_id: 18
