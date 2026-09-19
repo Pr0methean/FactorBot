@@ -57,15 +57,6 @@ jobs:
           fetch-depth: 0 # Needed for git-restore-mtime-action
       - name: Restore timestamps # Prevents an unnecessary rebuild
         uses: chetan/git-restore-mtime-action@v2
-      - name: Cache apt/dpkg
-        uses: actions/cache@v6
-        with:
-          path: |
-            /usr/bin/ecm
-            /usr/lib/x86_64-linux-gnu/libecm.a
-            /var/cache/apt/archives/*.deb
-            /var/lib/dpkg/status
-          key: dpkg-ecm-2025-11-17
       - name: Detect native CPU target
         id: get_target_cpu
         run: |
