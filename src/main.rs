@@ -113,7 +113,8 @@ const SEARCH_RETRY_DELAY: Duration = Duration::from_secs(10);
 const UNPARSEABLE_RESPONSE_RETRY_DELAY: Duration = Duration::from_secs(10);
 const PRP_RESULTS_PER_PAGE: usize = 32;
 const PRP_MIN_DIGITS: NumberLength = 300u32;
-const PRP_MAX_DIGITS: NumberLength = 80_000u32; // FIXME: Increase this once FactorDB can handle PRP checks on larger numbers without timing out.
+const PRP_MAX_DIGITS: NumberLength = 80_000u32;
+const PRP_MIN_DIGITS_FOR_START_OFFSET: NumberLength = 3200;
 const PRP_MAX_DIGITS_FOR_START_OFFSET: NumberLength = 30489;
 const U_RESULTS_PER_PAGE: usize = 1;
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
@@ -989,7 +990,7 @@ async fn main() -> anyhow::Result<()> {
                         prp_permit.send(prp_id);
                         info!("{prp_id}: Queued PRP from search");
                     }
-                    if prp_digits > PRP_MAX_DIGITS_FOR_START_OFFSET {
+                    if prp_digits > PRP_MAX_DIGITS_FOR_START_OFFSET || prp_digits < PRP_MIN_DIGITS_FOR_START_OFFSET {
                         prp_digits += if prp_digits > 100_001 {
                             100
                         } else {
