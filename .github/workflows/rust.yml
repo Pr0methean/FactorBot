@@ -57,16 +57,6 @@ jobs:
           fetch-depth: 0 # Needed for git-restore-mtime-action
       - name: Restore timestamps # Prevents an unnecessary rebuild
         uses: chetan/git-restore-mtime-action@v2
-      - name: Detect native CPU target
-        id: get_target_cpu
-        run: |
-          target_cpu=$(rustc --print target-cpus | awk '/native/{getline; print $1; exit}')
-          if [ -z "$target_cpu" ]; then
-            echo "ERROR: Failed to detect native CPU target"
-            exit 1
-          fi
-          echo "target_cpu=$target_cpu" >> $GITHUB_OUTPUT
-          echo "Detected CPU: $target_cpu"
       - name: Detect CPU capabilities
         id: cpu_caps
         run: |
@@ -79,9 +69,9 @@ jobs:
             ~/.cargo
             target
             Cargo.lock
-          key: cargo-${{ steps.get_target_cpu.outputs.target_cpu }}-${{ steps.cpu_caps.outputs.cpu_flags }}-${{ hashFiles('.github/workflows/rust.yml', '**/Cargo.toml') }}
+          key: cargo-${{ steps.cpu_caps.outputs.cpu_flags }}-${{ hashFiles('.github/workflows/rust.yml', '**/Cargo.toml') }}
           restore-keys: |
-            cargo-${{ steps.get_target_cpu.outputs.target_cpu }}-${{ steps.cpu_caps.outputs.cpu_flags }}-
+            cargo-${{ steps.cpu_caps.outputs.cpu_flags }}-
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@nightly
       - name: Build while installing runtime dependencies
