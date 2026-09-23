@@ -3,8 +3,10 @@ permissions:
   contents: read
 on:
   schedule:
-    - cron: '34 0,12 * * *' # 00:34 and 12:34
-    - cron: '34 6,18 * * *' # 06:34 and 18:34
+    - cron: '41 1,13 * * *'
+    - cron: '41 4,16 * * *'
+    - cron: '41 7,19 * * *'
+    - cron: '41 10,22 * * *'
   push:
     branches: [ "main" ]
   pull_request:
