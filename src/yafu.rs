@@ -23,7 +23,6 @@ use tokio::sync::OnceCell;
 use tokio::sync::mpsc::Receiver;
 use tokio::task;
 use tokio::time::{Duration, Instant, sleep};
-use yamaquasi::arith::Num;
 
 pub static YAFU_SENDER: OnceCell<tokio::sync::mpsc::Sender<YafuWorkItem>> = OnceCell::const_new();
 
