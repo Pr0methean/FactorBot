@@ -2271,7 +2271,7 @@ pub(crate) fn find_factors_of_numeric(input: NumericFactor) -> BTreeMap<Factor, 
 pub(crate) fn find_raw_factors_of_numeric(
     input: NumericFactor,
 ) -> BTreeMap<NumericFactor, NumberLength> {
-    const MAX_FACTORIZE128: NumericFactor = 1 << (85 - 1);
+    const MAX_FACTORIZE128: NumericFactor = 1 << 64;
     task::block_in_place(|| match input {
         1 => BTreeMap::new(),
         0 | 2 | 3 => [(input, 1)].into(),

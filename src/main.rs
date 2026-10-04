@@ -113,7 +113,8 @@ const SEARCH_RETRY_DELAY: Duration = Duration::from_secs(10);
 const UNPARSEABLE_RESPONSE_RETRY_DELAY: Duration = Duration::from_secs(10);
 const PRP_RESULTS_PER_PAGE: usize = 32;
 const PRP_MIN_DIGITS: NumberLength = 300u32;
-const PRP_MAX_DIGITS: NumberLength = 80_000u32; // FIXME: Increase this once FactorDB can handle PRP checks on larger numbers without timing out.
+const PRP_MAX_DIGITS: NumberLength = 80_000u32;
+const PRP_MIN_DIGITS_FOR_START_OFFSET: NumberLength = 3200;
 const PRP_MAX_DIGITS_FOR_START_OFFSET: NumberLength = 30489;
 const U_RESULTS_PER_PAGE: usize = 1;
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
@@ -134,6 +135,7 @@ pub(crate) static FAILED_U_SUBMISSIONS_OUT: OnceCell<Mutex<File>> = OnceCell::co
 struct CompositeCheckTask {
     id: Option<EntryId>,
     digits_or_expr: HipStr<'static>,
+    index_within_length: EntryId,
 }
 
 impl PartialEq<Self> for CompositeCheckTask {
@@ -176,13 +178,13 @@ async fn composites_while_waiting(
     };
     info!("Processing composites for {remaining:?} while other work is waiting");
     loop {
-        let Ok((CompositeCheckTask { id, digits_or_expr }, return_permit)) =
+        let Ok((CompositeCheckTask { id, digits_or_expr, index_within_length }, return_permit )) =
             timeout(remaining, c_receiver.recv()).await
         else {
             warn!("Timed out waiting for a composite number to check");
             return;
         };
-        check_composite(http, c_filter, id, digits_or_expr, return_permit).await;
+        check_composite(http, c_filter, id, digits_or_expr, return_permit, index_within_length).await;
         match end.checked_duration_since(Instant::now()) {
             None => {
                 info!("Out of time while processing composites");
@@ -200,6 +202,7 @@ async fn check_composite(
     id: Option<EntryId>,
     digits_or_expr: HipStr<'static>,
     return_permit: OwnedPermit<CompositeCheckTask>,
+    index_within_length: EntryId,
 ) -> bool {
     if let Some(id) = id
         && c_filter.contains(&id)
@@ -235,7 +238,7 @@ async fn check_composite(
             warn!("{id:?}: Already fully factored");
             true
         } else {
-            return_permit.send(CompositeCheckTask { id, digits_or_expr });
+            return_permit.send(CompositeCheckTask { id, digits_or_expr, index_within_length });
             info!("{id:?}: Requeued C");
             false
         }
@@ -262,6 +265,7 @@ async fn check_composite(
                         number: number_str,
                         lower_bound,
                         upper_bound,
+                        index_within_length
                     };
                     match sender.send(item).await {
                         Ok(()) => {
@@ -274,7 +278,7 @@ async fn check_composite(
             }
         }
         if !dispatched && !checks_triggered && !factors_submitted {
-            return_permit.send(CompositeCheckTask { id, digits_or_expr });
+            return_permit.send(CompositeCheckTask { id, digits_or_expr, index_within_length });
             info!("{specifier}: Requeued C");
             false
         } else {
@@ -713,9 +717,9 @@ async fn main() -> anyhow::Result<()> {
                 }
 
                 c_task = c_receiver.recv() => {
-                    let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
+                    let (CompositeCheckTask {id, digits_or_expr, index_within_length}, return_permit) = c_task;
                     info!("{id:?}: Ready to check a C");
-                    check_composite(check_c_and_prp_http.as_ref(), &mut c_filter, id, digits_or_expr, return_permit).await;
+                    check_composite(check_c_and_prp_http.as_ref(), &mut c_filter, id, digits_or_expr, return_permit, index_within_length).await;
                 }
             }
         }
@@ -951,9 +955,11 @@ async fn main() -> anyhow::Result<()> {
                             info!("{results_per_page} C search results retrieved");
                             c_tasks.extend(c_http
                                 .read_ids_and_exprs(&composites_page.unwrap())
-                                .map(|(id, expr)| CompositeCheckTask {
+                                .zip(start..)
+                                .map(|((id, expr), index_within_length)| CompositeCheckTask {
                                     id: Some(id),
                                     digits_or_expr: expr.into(),
+                                    index_within_length
                                 }));
                             c_tasks.shuffle(&mut rng());
                         }
@@ -1019,7 +1025,7 @@ async fn main() -> anyhow::Result<()> {
                         prp_permit.send(prp_id);
                         info!("{prp_id}: Queued PRP from search");
                     }
-                    if prp_digits > PRP_MAX_DIGITS_FOR_START_OFFSET {
+                    if prp_digits > PRP_MAX_DIGITS_FOR_START_OFFSET || prp_digits < PRP_MIN_DIGITS_FOR_START_OFFSET {
                         prp_digits += if prp_digits > 100_001 {
                             100
                         } else {
