@@ -10,7 +10,9 @@ use crate::algebraic::{
 };
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
 use crate::graph::FactorsKnownToFactorDb::{NotUpToDate, UpToDate};
-use crate::net::NumberStatus::{FullyFactored, Invalid, PartlyFactoredComposite, Prime, UnfactoredComposite};
+use crate::net::NumberStatus::{
+    FullyFactored, Invalid, PartlyFactoredComposite, Prime, UnfactoredComposite,
+};
 use crate::net::{
     FactorDbClient, FactorDbClientReadIdsAndExprs, NumberStatus, NumberStatusExt,
     ProcessedStatusApiResponse,
@@ -321,7 +323,7 @@ impl FactorData {
             }
         }
     }
-    pub fn is_known_factor(&mut self, factor_vid: VertexId, composite_vid: VertexId) -> bool {
+    pub fn known_factor_of(&mut self, factor_vid: VertexId, composite_vid: VertexId) -> bool {
         let factor_vid = self.resolve_vid(factor_vid);
         let composite_vid = self.resolve_vid(composite_vid);
         if factor_vid == composite_vid {
@@ -817,23 +819,28 @@ fn dedup_and_shuffle<T: Ord>(deque: &mut VecDeque<T>) {
 #[framed]
 pub async fn find_and_submit_factors(
     http: &impl FactorDbClientReadIdsAndExprs,
-    id: EntryId,
+    specifier: &NumberSpecifier<'_>,
     root_factor: Factor,
     skip_looking_up_known: bool,
 ) -> bool {
     let mut digits_or_expr_full = Vec::new();
     let mut data = FactorData::default();
     let elided = root_factor.is_elided();
-    let (mut root_vid, _) = add_factor_node(&mut data, root_factor, Some(id), http);
+    let id = if let Id(id) = specifier {
+        Some(*id)
+    } else {
+        None
+    };
+    let (mut root_vid, _) = add_factor_node(&mut data, root_factor, id, http);
     let mut factor_found = false;
     if (!skip_looking_up_known) || elided {
         let ProcessedStatusApiResponse {
             factors: known_factors,
             status,
             ..
-        } = http.known_factors_as_digits(Id(id), false, true).await;
+        } = http.known_factors_as_digits(specifier, false, true).await;
         if status.is_known_finished() {
-            warn!("{id}: Already fully factored");
+            warn!("{specifier}: Already fully factored");
             return true;
         }
         if known_factors.len() == 1 && status != Some(PartlyFactoredComposite) {
@@ -882,7 +889,7 @@ pub async fn find_and_submit_factors(
         root_facts.last_known_status = Some(UnfactoredComposite);
     }
     let root_factor = data.get_factor(root_vid);
-    debug!("{id}: Root node for {root_factor} has vertex ID {root_vid:?}",);
+    debug!("{id:?}: Root node for {root_factor} has vertex ID {root_vid:?}",);
     digits_or_expr_full.push(root_vid);
     let mut accepted_factors = 0;
     let mut any_unprocessed = false;
@@ -899,7 +906,7 @@ pub async fn find_and_submit_factors(
             .is_fully_processed();
     }
     if !factor_found && !any_unprocessed {
-        info!("{id}: No factors to submit");
+        info!("{specifier}: No factors to submit");
         return false;
     }
     // Simplest case: try submitting all factors as factors of the root
@@ -932,11 +939,11 @@ pub async fn find_and_submit_factors(
     let mut factors_to_submit_in_graph = VecDeque::new();
     while let Some(factor_vid) = known_factors.pop_front() {
         let factor = data.get_factor(factor_vid);
-        debug!("{id}: Factor {factor} has vertex ID {factor_vid:?}");
+        debug!("{specifier}: Factor {factor} has vertex ID {factor_vid:?}");
         match data.get_edge(factor_vid, root_vid) {
             Some(Direct) | Some(Transitive) | Some(NotFactor) => {
                 info!(
-                    "{id}: Skipping {factor} because it's already known to be a factor of ID {id} (status: {:?})",
+                    "{specifier}: Skipping {factor} because it's already known to be a factor of root (status: {:?})",
                     data.get_edge(factor_vid, root_vid)
                 );
                 // This has been submitted directly to the root already, so it's probably already been
@@ -949,7 +956,7 @@ pub async fn find_and_submit_factors(
             // Can't submit a factor that we can't express, but
             // running add_factors_to_graph may provide an equivalent expression, else we can save
             // it in case we find out the ID later
-            info!("{id}: Temporarily skipping {factor} because digits are missing");
+            info!("{specifier}: Temporarily skipping {factor} because digits are missing");
             let factors_of_factor = add_factors_to_graph(http, &mut data, factor_vid).await;
             if !factors_of_factor.is_empty() {
                 all_vids.extend(factors_of_factor.iter().copied());
@@ -961,7 +968,7 @@ pub async fn find_and_submit_factors(
             }
             continue;
         }
-        match http.try_report_factor(Id(id), &factor).await {
+        match http.try_report_factor(specifier, &factor).await {
             AlreadyFullyFactored => return true,
             Accepted => {
                 data.propagate_divisibility(factor_vid, root_vid, false);
@@ -1005,7 +1012,7 @@ pub async fn find_and_submit_factors(
         root_vid = data.resolve_vid(root_vid);
     }
     if factors_to_submit_in_graph.is_empty() {
-        info!("{id}: {accepted_factors} factors accepted in a single pass");
+        info!("{specifier}: {accepted_factors} factors accepted in a single pass");
         return accepted_factors > 0;
     }
 
@@ -1021,7 +1028,7 @@ pub async fn find_and_submit_factors(
     let mut iters_without_progress = 0;
     let mut iters_to_next_report = 0;
     info!(
-        "{id}: {} factors left to submit after first pass",
+        "{specifier}: {} factors left to submit after first pass",
         factors_to_submit_in_graph.len()
     );
     'graph_iter: while !data
@@ -1048,7 +1055,7 @@ pub async fn find_and_submit_factors(
                 .reduce(|(x1, y1), (x2, y2)| (x1 + x2, y1 + y2))
                 .unwrap_or((0, 0));
             info!(
-                "{id}: Divisibility graph has {node_count} vertices and {edge_count} edges \
+                "{specifier}: Divisibility graph has {node_count} vertices and {edge_count} edges \
             ({:.2}% fully connected). {direct_divisors} confirmed-known divides relations, \
             {non_factors} ruled out. \
         {accepted_factors} factors accepted so far. {} fully factored numbers. {} known entry IDs",
@@ -1073,7 +1080,7 @@ pub async fn find_and_submit_factors(
         // later
         let factor = data.get_factor(factor_vid);
         if factor.is_elided() {
-            info!("{id}: Temporarily skipping {factor} because digits are missing");
+            info!("{specifier}: Temporarily skipping {factor} because digits are missing");
             // Can't submit a factor that we can't express, but
             // running add_factors_to_graph may provide an equivalent expression, else we can save
             // it in case we find out the ID later
@@ -1096,7 +1103,9 @@ pub async fn find_and_submit_factors(
             .collect::<Vec<_>>();
         dest_factors.shuffle(&mut rng());
         if dest_factors.is_empty() {
-            info!("{id}: Skipping {factor} because there are no more cofactors it can divide");
+            info!(
+                "{specifier}: Skipping {factor} because there are no more cofactors it can divide"
+            );
             continue;
         };
         let mut put_factor_back_into_queue = false;
@@ -1106,9 +1115,9 @@ pub async fn find_and_submit_factors(
                 continue;
             }
             let cofactor = data.get_factor(cofactor_vid);
-            if data.is_known_factor(factor_vid, cofactor_vid) {
+            if data.known_factor_of(factor_vid, cofactor_vid) {
                 info!(
-                    "{id}: Skipping submission of {factor} to {cofactor} because it's already known (based on graph check)"
+                    "{specifier}: Skipping submission of {factor} to {cofactor} because it's already known (based on graph check)"
                 );
                 // This factor already known.
                 // If transitive, submit to a smaller cofactor instead.
@@ -1119,24 +1128,24 @@ pub async fn find_and_submit_factors(
             let factor_facts = data.facts(factor_vid)
                 .expect("{id}: Reached factors_known_to_factordb check for a number not entered in number_facts_map");
             if factor_facts.last_known_status == Some(Invalid) {
-                info!("{id}: Skipping submission of {factor} because it's not an integer");
+                info!("{specifier}: Skipping submission of {factor} because it's not an integer");
                 continue 'graph_iter;
             }
             match factor_facts.factors_known_to_factordb {
                 UpToDate(ref already_known_factors) | NotUpToDate(ref already_known_factors) => {
                     if already_known_factors.contains(&cofactor_vid) {
                         info!(
-                            "{id}: Skipping submission of {factor} to {cofactor} because it's already known (based on FactorDB check)"
+                            "{specifier}: Skipping submission of {factor} to {cofactor} because it's already known (based on FactorDB check)"
                         );
                         data.propagate_divisibility(cofactor_vid, factor_vid, false);
                         continue;
                     } else if data
                         .facts(cofactor_vid)
-                        .expect("{id}: cofactor not in number_facts_map")
+                        .expect("{specifier}: cofactor not in number_facts_map")
                         .is_known_finished()
                     {
                         debug!(
-                            "{id}: Skipping submission of {factor} to {cofactor} because destination is already fully factored (based on FactorDB check)"
+                            "{specifier}: Skipping submission of {factor} to {cofactor} because destination is already fully factored (based on FactorDB check)"
                         );
                         data.rule_out_divisibility(cofactor_vid, factor_vid);
 
@@ -1146,7 +1155,7 @@ pub async fn find_and_submit_factors(
             }
             if factor == cofactor {
                 warn!(
-                    "{id}: Found duplicate vertices: {factor_vid:?} and {cofactor_vid:?} are both {factor}"
+                    "{specifier}: Found duplicate vertices: {factor_vid:?} and {cofactor_vid:?} are both {factor}"
                 );
                 let new_vids = merge_vertices(&mut data, http, factor_vid, cofactor_vid);
                 // Merge any new factor vids found during the merge
@@ -1167,20 +1176,25 @@ pub async fn find_and_submit_factors(
             // NumericFactor entries are already fully factored
             if let Numeric(_) = cofactor {
                 debug!(
-                    "{id}: Skipping submission of {factor} to {cofactor} because the destination is too small"
+                    "{specifier}: Skipping submission of {factor} to {cofactor} because the destination is too small"
                 );
                 continue;
             }
             let cofactor_facts = data.facts(cofactor_vid).expect(
-                "{id}: Reached cofactor_facts check for a number not entered in number_facts_map",
+                "{specifier}: Reached cofactor_facts check for a number not entered in number_facts_map",
             );
             if cofactor_facts.last_known_status == Some(Invalid) {
-                for factor_vid in data.divisibility_graph.node_indices().collect::<Vec<_>>().into_iter() {
+                for factor_vid in data
+                    .divisibility_graph
+                    .node_indices()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                {
                     data.rule_out_divisibility(factor_vid, cofactor_vid);
                     data.rule_out_divisibility(cofactor_vid, factor_vid);
                 }
                 info!(
-                    "{id}: Skipping submission of {factor} to {cofactor} because the destination is not an integer"
+                    "{specifier}: Skipping submission of {factor} to {cofactor} because the destination is not an integer"
                 );
                 continue;
             }
@@ -1213,7 +1227,7 @@ pub async fn find_and_submit_factors(
                 drop(by_status);
                 if possible_factors.is_empty() {
                     info!(
-                        "{id}: Skipping submission of {factor} to {cofactor} because it can't divide any of the remaining cofactors (based on FactorDB check)"
+                        "{specifier}: Skipping submission of {factor} to {cofactor} because it can't divide any of the remaining cofactors (based on FactorDB check)"
                     );
                     // No possible path from factor to cofactor
                     for unknown_non_factor in unknown_non_factors {
@@ -1232,7 +1246,7 @@ pub async fn find_and_submit_factors(
                     data.get_edge(factor_vid, possible_factor_vid) == Some(Direct)
                 }) {
                     info!(
-                        "{id}: Skipping submission of {factor} to {cofactor} because it's already known (based on graph check)"
+                        "{specifier}: Skipping submission of {factor} to {cofactor} because it's already known (based on graph check)"
                     );
                     // Submit to one of the known_factors instead
                     data.propagate_divisibility(factor_vid, cofactor_vid, true);
@@ -1262,7 +1276,7 @@ pub async fn find_and_submit_factors(
                     cofactor_upper_bound_log10.saturating_sub(cofactor_prime_factor_log10s);
                 if factor_lower_bound_log10 > cofactor_remaining_factors_upper_bound_log10 {
                     info!(
-                        "{id}: Skipping submission of {factor} to {cofactor} because it's too large to divide any of the remaining cofactors (based on previous submissions)"
+                        "{specifier}: Skipping submission of {factor} to {cofactor} because it's too large to divide any of the remaining cofactors (based on previous submissions)"
                     );
                     data.rule_out_divisibility(factor_vid, cofactor_vid);
                     if cofactor_vid == root_vid {
@@ -1271,10 +1285,10 @@ pub async fn find_and_submit_factors(
                     continue;
                 }
             }
-            if data.is_known_factor(cofactor_vid, factor_vid) {
+            if data.known_factor_of(cofactor_vid, factor_vid) {
                 // factor is transitively divisible by cofactor
                 info!(
-                    "{id}: Skipping submission of {factor} to {cofactor} because it's a multiple"
+                    "{specifier}: Skipping submission of {factor} to {cofactor} because it's a multiple"
                 );
                 data.propagate_divisibility(cofactor_vid, factor_vid, true);
                 continue;
@@ -1291,7 +1305,7 @@ pub async fn find_and_submit_factors(
                 .is_none()
             {
                 info!(
-                    "{id}: Temporarily skipping submission of {factor} to {cofactor} because we can't unambiguously identify the destination"
+                    "{specifier}: Temporarily skipping submission of {factor} to {cofactor} because we can't unambiguously identify the destination"
                 );
 
                 // Running add_factors_to_graph may yield an equivalent expression
@@ -1306,10 +1320,10 @@ pub async fn find_and_submit_factors(
                 break 'per_cofactor;
             }
             let cofactor_specifier = data.as_specifier(cofactor_vid, http);
-            match http.try_report_factor(cofactor_specifier, &factor).await {
+            match http.try_report_factor(&cofactor_specifier, &factor).await {
                 AlreadyFullyFactored => {
                     if cofactor_vid == root_vid {
-                        warn!("{id}: Already fully factored");
+                        warn!("{specifier}: Already fully factored");
                         return true;
                     }
                     mark_fully_factored(cofactor_vid, &mut data);
@@ -1397,12 +1411,12 @@ pub async fn find_and_submit_factors(
         let factor = data.get_factor(factor_vid);
         if factor.is_elided() {
             debug!(
-                "{id}: Skipping writing {factor} to failed-submission file because we don't know its specifier"
+                "{specifier}: Skipping writing {factor} to failed-submission file because we don't know its specifier"
             );
             continue;
         }
         let factor = factor.to_unelided_string();
-        if data.is_known_factor(factor_vid, root_vid) {
+        if data.known_factor_of(factor_vid, root_vid) {
             continue;
         }
         match FAILED_U_SUBMISSIONS_OUT
@@ -1410,11 +1424,11 @@ pub async fn find_and_submit_factors(
             .unwrap()
             .lock()
             .await
-            .write_fmt(format_args!("{id},{factor}\n"))
+            .write_fmt(format_args!("{specifier},{factor}\n"))
         {
-            Ok(_) => warn!("{id}: wrote {} to failed submissions file", factor),
+            Ok(_) => warn!("{specifier}: wrote {} to failed submissions file", factor),
             Err(e) => error!(
-                "{id}: failed to write {} to failed submissions file: {e}",
+                "{specifier}: failed to write {} to failed submissions file: {e}",
                 factor
             ),
         }
@@ -1529,7 +1543,7 @@ async fn add_factors_to_graph(
             factors: known_factors,
             id: new_id,
         } = http
-            .known_factors_as_digits(factor_specifier, true, elided)
+            .known_factors_as_digits(&factor_specifier, true, elided)
             .await;
         let known_factor_count = known_factors.len();
         let new_known_factors: Vec<_> = if known_factor_count == 1 {
@@ -1643,6 +1657,7 @@ pub mod tests {
     use std::iter::{once, repeat};
     use sysinfo::{MemoryRefreshKind, RefreshKind};
 
+    use crate::NumberSpecifier::Id;
     use crate::ReportFactorResult;
     use crate::algebraic::Factor;
     use crate::graph::{EntryId, NumericFactor};
@@ -1687,18 +1702,18 @@ pub mod tests {
         data.propagate_divisibility(node3, node2, false);
         data.propagate_divisibility(node4, node2, false);
         data.propagate_divisibility(node5, node1, false);
-        assert!(!data.is_known_factor(node1, node1));
-        assert!(data.is_known_factor(node2, node1));
-        assert!(data.is_known_factor(node3, node1));
-        assert!(data.is_known_factor(node4, node1));
-        assert!(data.is_known_factor(node5, node1));
-        assert!(!data.is_known_factor(node1, node2));
-        assert!(!data.is_known_factor(node2, node2));
-        assert!(data.is_known_factor(node3, node2));
-        assert!(data.is_known_factor(node4, node2));
+        assert!(!data.known_factor_of(node1, node1));
+        assert!(data.known_factor_of(node2, node1));
+        assert!(data.known_factor_of(node3, node1));
+        assert!(data.known_factor_of(node4, node1));
+        assert!(data.known_factor_of(node5, node1));
+        assert!(!data.known_factor_of(node1, node2));
+        assert!(!data.known_factor_of(node2, node2));
+        assert!(data.known_factor_of(node3, node2));
+        assert!(data.known_factor_of(node4, node2));
         for divisibility_leaf in [node3, node4, node5] {
             for other_node in [node1, node2, node3, node4, node5] {
-                assert!(!data.is_known_factor(other_node, divisibility_leaf));
+                assert!(!data.known_factor_of(other_node, divisibility_leaf));
             }
         }
     }
@@ -1759,18 +1774,18 @@ pub mod tests {
         data.propagate_divisibility(node3, node2, false);
         data.propagate_divisibility(node4, node2, false);
         data.propagate_divisibility(node5, node1, false);
-        assert!(!data.is_known_factor(node1, node1));
-        assert!(data.is_known_factor(node2, node1));
-        assert!(data.is_known_factor(node3, node1));
-        assert!(data.is_known_factor(node4, node1));
-        assert!(data.is_known_factor(node5, node1));
-        assert!(!data.is_known_factor(node1, node2));
-        assert!(!data.is_known_factor(node2, node2));
-        assert!(data.is_known_factor(node3, node2));
-        assert!(data.is_known_factor(node4, node2));
+        assert!(!data.known_factor_of(node1, node1));
+        assert!(data.known_factor_of(node2, node1));
+        assert!(data.known_factor_of(node3, node1));
+        assert!(data.known_factor_of(node4, node1));
+        assert!(data.known_factor_of(node5, node1));
+        assert!(!data.known_factor_of(node1, node2));
+        assert!(!data.known_factor_of(node2, node2));
+        assert!(data.known_factor_of(node3, node2));
+        assert!(data.known_factor_of(node4, node2));
         for divisibility_leaf in [node3, node4, node5] {
             for other_node in [node1, node2, node3, node4, node5] {
-                assert!(!data.is_known_factor(other_node, divisibility_leaf));
+                assert!(!data.known_factor_of(other_node, divisibility_leaf));
             }
         }
     }
@@ -1795,7 +1810,7 @@ pub mod tests {
             let mut http = RealFactorDbClient::new(nonzero!(10_000u32));
             find_and_submit_factors(
                 &mut http,
-                11_000_000_004_420_33401,
+                &Id(11_000_000_004_420_33401),
                 format!("I({})", 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19).into(),
                 false,
             )
@@ -1913,11 +1928,11 @@ pub mod tests {
         data.propagate_divisibility(b, c, false);
 
         // Should know a divides c transitively
-        assert!(data.is_known_factor(a, c));
+        assert!(data.known_factor_of(a, c));
 
         // And direct ones
-        assert!(data.is_known_factor(a, b));
-        assert!(data.is_known_factor(b, c));
+        assert!(data.known_factor_of(a, b));
+        assert!(data.known_factor_of(b, c));
     }
 
     #[test]
@@ -2000,7 +2015,7 @@ pub mod tests {
         // ensure expr uses heap space
         let expr = Factor::from(EXPR);
         let mut reg = stats_alloc::Region::new(&GLOBAL);
-        black_box(find_and_submit_factors(&http, ID, expr, false).await);
+        black_box(find_and_submit_factors(&http, &Id(ID), expr, false).await);
 
         log_stats(&mut reg, &mut sys, &mut None);
     }

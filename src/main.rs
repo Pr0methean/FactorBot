@@ -20,7 +20,7 @@ use crate::algebraic::Factor;
 use crate::graph::EntryId;
 use crate::monitor::Monitor;
 use crate::net::{FactorDbClient, FactorDbClientReadIdsAndExprs};
-use crate::yafu::{YafuWorkItem, YAFU_KILL_GRACE_PERIOD, YAFU_SENDER, yafu_task};
+use crate::yafu::{YAFU_KILL_GRACE_PERIOD, YAFU_SENDER, YafuWorkItem, yafu_task};
 use ahash::RandomState;
 use alloc::sync::Arc;
 use async_backtrace::framed;
@@ -31,7 +31,7 @@ use futures_util::FutureExt;
 use hipstr::HipStr;
 use log::{error, info, warn};
 use net::NumberStatus::FullyFactored;
-use net::{RealFactorDbClient};
+use net::RealFactorDbClient;
 use net::{NumberStatusExt, ProcessedStatusApiResponse};
 use quick_cache::UnitWeighter;
 use quick_cache::sync::{Cache, DefaultLifecycle};
@@ -52,7 +52,7 @@ use std::panic;
 use std::process::{abort, exit};
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::{Release};
+use std::sync::atomic::Ordering::Release;
 use std::time::SystemTime;
 use sysinfo::MemoryRefreshKind;
 use sysinfo::RefreshKind;
@@ -133,9 +133,9 @@ pub(crate) static FAILED_U_SUBMISSIONS_OUT: OnceCell<Mutex<File>> = OnceCell::co
 
 #[derive(Clone, Debug, Eq)]
 struct CompositeCheckTask {
-    id: EntryId,
+    id: Option<EntryId>,
     digits_or_expr: HipStr<'static>,
-    index_within_length: EntryId,
+    index_within_length: Option<EntryId>,
 }
 
 impl PartialEq<Self> for CompositeCheckTask {
@@ -178,13 +178,27 @@ async fn composites_while_waiting(
     };
     info!("Processing composites for {remaining:?} while other work is waiting");
     loop {
-        let Ok((CompositeCheckTask { id, digits_or_expr, index_within_length }, return_permit )) =
-            timeout(remaining, c_receiver.recv()).await
+        let Ok((
+            CompositeCheckTask {
+                id,
+                digits_or_expr,
+                index_within_length,
+            },
+            return_permit,
+        )) = timeout(remaining, c_receiver.recv()).await
         else {
             warn!("Timed out waiting for a composite number to check");
             return;
         };
-        check_composite(http, c_filter, id, digits_or_expr, return_permit, index_within_length).await;
+        check_composite(
+            http,
+            c_filter,
+            id,
+            digits_or_expr,
+            return_permit,
+            index_within_length,
+        )
+        .await;
         match end.checked_duration_since(Instant::now()) {
             None => {
                 info!("Out of time while processing composites");
@@ -199,19 +213,22 @@ async fn composites_while_waiting(
 async fn check_composite(
     http: &impl FactorDbClientReadIdsAndExprs,
     c_filter: &mut CuckooFilter<DefaultHasher>,
-    id: EntryId,
+    id: Option<EntryId>,
     digits_or_expr: HipStr<'static>,
     return_permit: OwnedPermit<CompositeCheckTask>,
-    index_within_length: EntryId,
+    index_within_length: Option<EntryId>,
 ) -> bool {
-    if c_filter.contains(&id) {
+    if let Some(id) = id
+        && c_filter.contains(&id)
+    {
         info!("{id}: Skipping duplicate C");
         return true;
     }
-    let checks_triggered = if http
-        .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}"))
-        .await
-        .is_some()
+    let checks_triggered = if let Some(id) = id
+        && http
+            .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}"))
+            .await
+            .is_some()
     {
         info!("{id}: Checked C");
         true
@@ -219,16 +236,28 @@ async fn check_composite(
         false
     };
     // First, convert the composite to digits
+    let specifier = if let Some(id) = id {
+        Id(id)
+    } else {
+        Expression(Cow::Owned(Factor::from(digits_or_expr.as_str())))
+    };
     let ProcessedStatusApiResponse {
-        factors, status, ..
-    } = http.known_factors_as_digits(Id(id), false, true).await;
+        factors,
+        status,
+        id,
+        ..
+    } = http.known_factors_as_digits(&specifier, false, true).await;
     if factors.is_empty() {
         if status.is_known_finished() {
-            warn!("{id}: Already fully factored");
+            warn!("{id:?}: Already fully factored");
             true
         } else {
-            return_permit.send(CompositeCheckTask { id, digits_or_expr, index_within_length });
-            info!("{id}: Requeued C");
+            return_permit.send(CompositeCheckTask {
+                id,
+                digits_or_expr,
+                index_within_length,
+            });
+            info!("{id:?}: Requeued C");
             false
         }
     } else {
@@ -238,7 +267,12 @@ async fn check_composite(
             if matches!(factor, Factor::Numeric(_)) {
                 continue;
             }
-            if graph::find_and_submit_factors(http, id, factor.clone(), true).await {
+            let specifier = if let Some(id) = id {
+                Id(id)
+            } else {
+                Expression(Cow::Borrowed(&factor))
+            };
+            if graph::find_and_submit_factors(http, &specifier, factor.clone(), true).await {
                 factors_submitted = true;
             } else {
                 if let Some(sender) = YAFU_SENDER.get() {
@@ -249,21 +283,25 @@ async fn check_composite(
                         number: number_str,
                         lower_bound,
                         upper_bound,
-                        index_within_length
+                        index_within_length,
                     };
                     match sender.send(item).await {
                         Ok(()) => {
-                            info!("{id}: Dispatched C to yafu");
+                            info!("{specifier}: Dispatched C to yafu");
                             dispatched = true;
                         }
-                        Err(e) => error!("{id}: Failed to send to yafu_task: {e}"),
+                        Err(e) => error!("{specifier}: Failed to send to yafu_task: {e}"),
                     }
                 }
             }
         }
         if !dispatched && !checks_triggered && !factors_submitted {
-            return_permit.send(CompositeCheckTask { id, digits_or_expr, index_within_length });
-            info!("{id}: Requeued C");
+            return_permit.send(CompositeCheckTask {
+                id,
+                digits_or_expr,
+                index_within_length,
+            });
+            info!("{specifier}: Requeued C");
             false
         } else {
             true
@@ -352,18 +390,24 @@ async fn main() -> anyhow::Result<()> {
     {
         convert_deadline(deadline_unix, &SOFT_DEADLINE);
     } else if std::env::var("CI").is_ok()
-        && SOFT_DEADLINE.set(Instant::now().add(Duration::from_hours(5))).is_ok() {
-            warn!("Set SOFT_DEADLINE using fallback for CI (5h)");
-        }
+        && SOFT_DEADLINE
+            .set(Instant::now().add(Duration::from_hours(5)))
+            .is_ok()
+    {
+        warn!("Set SOFT_DEADLINE using fallback for CI (5h)");
+    }
     let deadline_val = std::env::var("HARD_DEADLINE").ok();
     if let Some(deadline_str) = deadline_val
         && let Ok(deadline_unix) = deadline_str.parse::<u64>()
     {
         convert_deadline(deadline_unix, &HARD_DEADLINE);
     } else if std::env::var("CI").is_ok()
-        && HARD_DEADLINE.set(Instant::now().add(Duration::from_mins(355))).is_ok() {
-            warn!("Set HARD_DEADLINE using fallback for CI (5h55m)");
-        }
+        && HARD_DEADLINE
+            .set(Instant::now().add(Duration::from_mins(355)))
+            .is_ok()
+    {
+        warn!("Set HARD_DEADLINE using fallback for CI (5h55m)");
+    }
     let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
     simple_log::console("info,reqwest=debug").unwrap();
 
@@ -399,7 +443,8 @@ async fn main() -> anyhow::Result<()> {
         && let Ok(mut run_number) = run_str.parse::<EntryId>()
     {
         if let Ok(sub_run_number) = std::env::var("SUB_RUN")
-                && let Ok(sub_run_number) = sub_run_number.parse::<EntryId>() {
+            && let Ok(sub_run_number) = sub_run_number.parse::<EntryId>()
+        {
             run_number += 149993 * (11 + sub_run_number);
         }
         if c_digits.is_none() {
@@ -548,7 +593,7 @@ async fn main() -> anyhow::Result<()> {
                                     factors,
                                     ..
                                 } = check_c_and_prp_http
-                                    .known_factors_as_digits(Id(id_to_check), false, false)
+                                    .known_factors_as_digits(&Id(id_to_check), false, false)
                                     .await;
                                 if factors.is_empty() && status == Some(FullyFactored) {
                                     info!("{id}: {parameter} (ID {id_to_check}) is fully factored!");
@@ -649,7 +694,7 @@ async fn main() -> anyhow::Result<()> {
                                 factors
                             } else {
                                 check_c_and_prp_http
-                                    .known_factors_as_digits(Id(info.id), false, true)
+                                    .known_factors_as_digits(&Id(info.id), false, true)
                                     .await
                                     .factors
                             };
@@ -657,7 +702,7 @@ async fn main() -> anyhow::Result<()> {
                                 if !matches!(factor, Factor::Numeric(_)) {
                                     graph::find_and_submit_factors(
                                         check_c_and_prp_http.as_ref(),
-                                        info.id,
+                                        &Id(info.id),
                                         factor,
                                         true,
                                     )
@@ -695,7 +740,7 @@ async fn main() -> anyhow::Result<()> {
 
                 c_task = c_receiver.recv() => {
                     let (CompositeCheckTask {id, digits_or_expr, index_within_length}, return_permit) = c_task;
-                    info!("{id}: Ready to check a C");
+                    info!("{id:?}: Ready to check a C");
                     check_composite(check_c_and_prp_http.as_ref(), &mut c_filter, id, digits_or_expr, return_permit, index_within_length).await;
                 }
             }
@@ -817,7 +862,7 @@ async fn main() -> anyhow::Result<()> {
                     let digits_or_expr = Factor::from(digits_or_expr);
                     if graph::find_and_submit_factors(
                         &*u_http,
-                        u_id,
+                        &Id(u_id),
                         digits_or_expr,
                         false,
                     )
@@ -878,6 +923,19 @@ async fn main() -> anyhow::Result<()> {
             next_backtrace = Instant::now() + STATS_INTERVAL;
         }
     });
+    let chosen_c = std::env::var("CHOSEN_C");
+    if let Ok(chosen_c) = chosen_c {
+        for chosen_c in chosen_c.as_str().split_whitespace() {
+            c_sender
+                .send(CompositeCheckTask {
+                    id: None,
+                    digits_or_expr: chosen_c.into(),
+                    index_within_length: None,
+                })
+                .await
+                .expect("Failed to send composite check task for {chosen_c}");
+        }
+    }
     let queue_c: JoinHandle<Result<(), SendError<()>>> = if c_digits != Some(0) {
         let c_http = http.clone();
         task::spawn(async move {
@@ -922,9 +980,9 @@ async fn main() -> anyhow::Result<()> {
                                 .read_ids_and_exprs(&composites_page.unwrap())
                                 .zip(start..)
                                 .map(|((id, expr), index_within_length)| CompositeCheckTask {
-                                    id,
+                                    id: Some(id),
                                     digits_or_expr: expr.into(),
-                                    index_within_length
+                                    index_within_length: Some(index_within_length)
                                 }));
                             c_tasks.shuffle(&mut rng());
                         }
@@ -990,7 +1048,7 @@ async fn main() -> anyhow::Result<()> {
                         prp_permit.send(prp_id);
                         info!("{prp_id}: Queued PRP from search");
                     }
-                    if prp_digits > PRP_MAX_DIGITS_FOR_START_OFFSET || prp_digits < PRP_MIN_DIGITS_FOR_START_OFFSET {
+                    if !(PRP_MIN_DIGITS_FOR_START_OFFSET..=PRP_MAX_DIGITS_FOR_START_OFFSET).contains(&prp_digits) {
                         prp_digits += if prp_digits > 100_001 {
                             100
                         } else {
@@ -1036,7 +1094,9 @@ fn convert_deadline(deadline_unix: u64, destination: &OnceCell<Instant>) {
     };
     let exit_instant = now_instant + remaining_duration;
     if destination.set(exit_instant).is_ok() {
-        info!("Set EXIT_TIME deadline to Unix timestamp {deadline_unix} ({remaining_duration:?} remaining)");
+        info!(
+            "Set EXIT_TIME deadline to Unix timestamp {deadline_unix} ({remaining_duration:?} remaining)"
+        );
     }
 }
 
