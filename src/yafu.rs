@@ -272,7 +272,7 @@ pub async fn yafu_task(
         } else {
             Expression(Cow::Owned(composite))
         };
-        let mut kill_yafu = Arc::new(AtomicBool::new(false));
+        let kill_yafu = Arc::new(AtomicBool::new(false));
         while !kill_yafu.load(Ordering::Acquire) && !yafu_failed {
             select! {
                 biased;

@@ -836,7 +836,7 @@ pub async fn find_and_submit_factors(
             factors: known_factors,
             status,
             ..
-        } = http.known_factors_as_digits(&specifier, false, true).await;
+        } = http.known_factors_as_digits(specifier, false, true).await;
         if status.is_known_finished() {
             warn!("{specifier}: Already fully factored");
             return true;
@@ -966,7 +966,7 @@ pub async fn find_and_submit_factors(
             }
             continue;
         }
-        match http.try_report_factor(&specifier, &factor).await {
+        match http.try_report_factor(specifier, &factor).await {
             AlreadyFullyFactored => return true,
             Accepted => {
                 data.propagate_divisibility(factor_vid, root_vid, false);

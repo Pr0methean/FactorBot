@@ -355,7 +355,7 @@ impl FactorDbClient for RealFactorDbClient {
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse {
         debug!("known_factors_as_digits: id={id:?}");
-        if let Some(cached) = self.cached_factors(&id) {
+        if let Some(cached) = self.cached_factors(id) {
             return cached;
         }
         let response = match id {
