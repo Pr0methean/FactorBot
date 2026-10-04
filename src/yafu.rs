@@ -245,9 +245,13 @@ pub async fn yafu_task(
         // Index   0..=4  25000..=25004  50000..=50004  75000..=75004  100000..=100004
         // C93         5              5              5              0                2
         // C94         5              5              1              3                1
-        let expr = if item.upper_bound <= 93 && item.index_within_length <= 50000 {
-            format!("nfs({number})\n")
-        } else if item.upper_bound <= 94 && item.index_within_length <= 25000 {
+        let should_skip_ecm = match item.upper_bound {
+            0..93 => false, // high turnover means unlikely to have already been ECMed
+            93 => item.index_within_length <= 50000,
+            94 => item.index_within_length <= 25000,
+            95.. => false,
+        };
+        let expr = if should_skip_ecm {
             format!("nfs({number})\n")
         } else {
             format!("factor({number})\n")

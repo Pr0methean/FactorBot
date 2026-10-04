@@ -1025,7 +1025,7 @@ async fn main() -> anyhow::Result<()> {
                         prp_permit.send(prp_id);
                         info!("{prp_id}: Queued PRP from search");
                     }
-                    if prp_digits > PRP_MAX_DIGITS_FOR_START_OFFSET || prp_digits < PRP_MIN_DIGITS_FOR_START_OFFSET {
+                    if !(PRP_MIN_DIGITS_FOR_START_OFFSET..=PRP_MAX_DIGITS_FOR_START_OFFSET).contains(&prp_digits) {
                         prp_digits += if prp_digits > 100_001 {
                             100
                         } else {
