@@ -178,13 +178,27 @@ async fn composites_while_waiting(
     };
     info!("Processing composites for {remaining:?} while other work is waiting");
     loop {
-        let Ok((CompositeCheckTask { id, digits_or_expr, index_within_length }, return_permit )) =
-            timeout(remaining, c_receiver.recv()).await
+        let Ok((
+            CompositeCheckTask {
+                id,
+                digits_or_expr,
+                index_within_length,
+            },
+            return_permit,
+        )) = timeout(remaining, c_receiver.recv()).await
         else {
             warn!("Timed out waiting for a composite number to check");
             return;
         };
-        check_composite(http, c_filter, id, digits_or_expr, return_permit, index_within_length).await;
+        check_composite(
+            http,
+            c_filter,
+            id,
+            digits_or_expr,
+            return_permit,
+            index_within_length,
+        )
+        .await;
         match end.checked_duration_since(Instant::now()) {
             None => {
                 info!("Out of time while processing composites");
@@ -238,7 +252,11 @@ async fn check_composite(
             warn!("{id:?}: Already fully factored");
             true
         } else {
-            return_permit.send(CompositeCheckTask { id, digits_or_expr, index_within_length });
+            return_permit.send(CompositeCheckTask {
+                id,
+                digits_or_expr,
+                index_within_length,
+            });
             info!("{id:?}: Requeued C");
             false
         }
@@ -265,7 +283,7 @@ async fn check_composite(
                         number: number_str,
                         lower_bound,
                         upper_bound,
-                        index_within_length
+                        index_within_length,
                     };
                     match sender.send(item).await {
                         Ok(()) => {
@@ -278,7 +296,11 @@ async fn check_composite(
             }
         }
         if !dispatched && !checks_triggered && !factors_submitted {
-            return_permit.send(CompositeCheckTask { id, digits_or_expr, index_within_length });
+            return_permit.send(CompositeCheckTask {
+                id,
+                digits_or_expr,
+                index_within_length,
+            });
             info!("{specifier}: Requeued C");
             false
         } else {
