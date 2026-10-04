@@ -40,7 +40,7 @@ pub struct YafuWorkItem {
     pub number: HipStr<'static>,
     pub lower_bound: NumberLength,
     pub upper_bound: NumberLength,
-    pub index_within_length: EntryId,
+    pub index_within_length: Option<EntryId>,
 }
 
 impl Ord for YafuWorkItem {
@@ -247,8 +247,8 @@ pub async fn yafu_task(
         // C94         5              5              1              3                1
         let should_skip_ecm = match item.upper_bound {
             0..93 => false, // high turnover means unlikely to have already been ECMed
-            93 => item.index_within_length <= 50000,
-            94 => item.index_within_length <= 25000,
+            93 => item.index_within_length.is_none_or(|index| index <= 50000),
+            94 => item.index_within_length.is_none_or(|index| index <= 25000),
             95.. => false,
         };
         let expr = if should_skip_ecm {

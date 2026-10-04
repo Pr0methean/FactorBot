@@ -135,7 +135,7 @@ pub(crate) static FAILED_U_SUBMISSIONS_OUT: OnceCell<Mutex<File>> = OnceCell::co
 struct CompositeCheckTask {
     id: Option<EntryId>,
     digits_or_expr: HipStr<'static>,
-    index_within_length: EntryId,
+    index_within_length: Option<EntryId>,
 }
 
 impl PartialEq<Self> for CompositeCheckTask {
@@ -202,7 +202,7 @@ async fn check_composite(
     id: Option<EntryId>,
     digits_or_expr: HipStr<'static>,
     return_permit: OwnedPermit<CompositeCheckTask>,
-    index_within_length: EntryId,
+    index_within_length: Option<EntryId>,
 ) -> bool {
     if let Some(id) = id
         && c_filter.contains(&id)
@@ -908,6 +908,7 @@ async fn main() -> anyhow::Result<()> {
                 .send(CompositeCheckTask {
                     id: None,
                     digits_or_expr: chosen_c.into(),
+                    index_within_length: None,
                 })
                 .await
                 .expect("Failed to send composite check task for {chosen_c}");
@@ -959,7 +960,7 @@ async fn main() -> anyhow::Result<()> {
                                 .map(|((id, expr), index_within_length)| CompositeCheckTask {
                                     id: Some(id),
                                     digits_or_expr: expr.into(),
-                                    index_within_length
+                                    index_within_length: Some(index_within_length)
                                 }));
                             c_tasks.shuffle(&mut rng());
                         }
