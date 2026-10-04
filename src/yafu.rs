@@ -1,3 +1,4 @@
+use crate::FAILED_U_SUBMISSIONS_OUT;
 use crate::NumberLength;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
@@ -5,7 +6,6 @@ use crate::algebraic::Factor;
 use crate::graph::EntryId;
 use crate::monitor::Monitor;
 use crate::net::{FactorDbClient, RealFactorDbClient};
-use crate::FAILED_U_SUBMISSIONS_OUT;
 
 use alloc::sync::Arc;
 use async_backtrace::framed;
@@ -15,8 +15,8 @@ use regex::Regex;
 use std::borrow::Cow;
 use std::collections::{BinaryHeap, HashSet};
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::select;
@@ -31,9 +31,8 @@ pub static YAFU_SENDER: OnceCell<tokio::sync::mpsc::Sender<YafuWorkItem>> = Once
 pub const YAFU_KILL_GRACE_PERIOD: Duration = Duration::from_secs(120);
 
 /// Regex matching yafu factor output lines, e.g. "P15 = 123456789012345" or "factor = 123456789012345".
-static YAFU_FACTOR_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:P\d+|factor)\s*=\s*([0-9]+)").unwrap()
-});
+static YAFU_FACTOR_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)(?:P\d+|factor)\s*=\s*([0-9]+)").unwrap());
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct YafuWorkItem {

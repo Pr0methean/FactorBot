@@ -2,8 +2,8 @@ use crate::algebraic::ComplexFactor::{
     AddSub, Divide, Factorial, Fibonacci, Lucas, Multiply, Power, Primorial,
 };
 use crate::algebraic::Factor::{Complex, ElidedNumber, Numeric, UnknownExpression};
-use crate::{create_cache, get_from_cache, BasicCache};
 use crate::net::BigNumber;
+use crate::{BasicCache, create_cache, get_from_cache};
 use crate::{NumberLength, hash, write_bignum};
 use ahash::{HashMap, HashMapExt};
 use derivative::Derivative;
@@ -2639,7 +2639,8 @@ fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
             Multiply { ref terms, .. } => {
                 let mut product = reducer.convert(1);
                 for (term, exponent) in terms.iter() {
-                    product *= modulo_as_reduced(term, reducer)?.pow(&NumericFactor::from(*exponent));
+                    product *=
+                        modulo_as_reduced(term, reducer)?.pow(&NumericFactor::from(*exponent));
                 }
                 Some(product)
             }
@@ -3679,7 +3680,9 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                     && (simplified == *expr || factor.may_be_proper_divisor_of(&simplified))
                 {
                     let f = simplify(&factor);
-                    if f != factor && (f.as_numeric() == Some(1) || !f.may_be_proper_divisor_of(&simplified)) {
+                    if f != factor
+                        && (f.as_numeric() == Some(1) || !f.may_be_proper_divisor_of(&simplified))
+                    {
                         continue;
                     }
                     if let Complex { inner: ref c, .. } = f {

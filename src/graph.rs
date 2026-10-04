@@ -10,7 +10,9 @@ use crate::algebraic::{
 };
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
 use crate::graph::FactorsKnownToFactorDb::{NotUpToDate, UpToDate};
-use crate::net::NumberStatus::{FullyFactored, Invalid, PartlyFactoredComposite, Prime, UnfactoredComposite};
+use crate::net::NumberStatus::{
+    FullyFactored, Invalid, PartlyFactoredComposite, Prime, UnfactoredComposite,
+};
 use crate::net::{
     FactorDbClient, FactorDbClientReadIdsAndExprs, NumberStatus, NumberStatusExt,
     ProcessedStatusApiResponse,
@@ -1101,7 +1103,9 @@ pub async fn find_and_submit_factors(
             .collect::<Vec<_>>();
         dest_factors.shuffle(&mut rng());
         if dest_factors.is_empty() {
-            info!("{specifier}: Skipping {factor} because there are no more cofactors it can divide");
+            info!(
+                "{specifier}: Skipping {factor} because there are no more cofactors it can divide"
+            );
             continue;
         };
         let mut put_factor_back_into_queue = false;
@@ -1180,7 +1184,12 @@ pub async fn find_and_submit_factors(
                 "{specifier}: Reached cofactor_facts check for a number not entered in number_facts_map",
             );
             if cofactor_facts.last_known_status == Some(Invalid) {
-                for factor_vid in data.divisibility_graph.node_indices().collect::<Vec<_>>().into_iter() {
+                for factor_vid in data
+                    .divisibility_graph
+                    .node_indices()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                {
                     data.rule_out_divisibility(factor_vid, cofactor_vid);
                     data.rule_out_divisibility(cofactor_vid, factor_vid);
                 }
@@ -1648,6 +1657,7 @@ pub mod tests {
     use std::iter::{once, repeat};
     use sysinfo::{MemoryRefreshKind, RefreshKind};
 
+    use crate::NumberSpecifier::Id;
     use crate::ReportFactorResult;
     use crate::algebraic::Factor;
     use crate::graph::{EntryId, NumericFactor};
@@ -1662,7 +1672,6 @@ pub mod tests {
     use mockall::predicate::eq;
     use nonzero::nonzero;
     use tokio::sync::Mutex;
-    use crate::NumberSpecifier::Id;
 
     #[test]
     fn test_is_known_factor_numeric() {

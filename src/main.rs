@@ -20,7 +20,7 @@ use crate::algebraic::Factor;
 use crate::graph::EntryId;
 use crate::monitor::Monitor;
 use crate::net::{FactorDbClient, FactorDbClientReadIdsAndExprs};
-use crate::yafu::{YafuWorkItem, YAFU_KILL_GRACE_PERIOD, YAFU_SENDER, yafu_task};
+use crate::yafu::{YAFU_KILL_GRACE_PERIOD, YAFU_SENDER, YafuWorkItem, yafu_task};
 use ahash::RandomState;
 use alloc::sync::Arc;
 use async_backtrace::framed;
@@ -31,7 +31,7 @@ use futures_util::FutureExt;
 use hipstr::HipStr;
 use log::{error, info, warn};
 use net::NumberStatus::FullyFactored;
-use net::{RealFactorDbClient};
+use net::RealFactorDbClient;
 use net::{NumberStatusExt, ProcessedStatusApiResponse};
 use quick_cache::UnitWeighter;
 use quick_cache::sync::{Cache, DefaultLifecycle};
@@ -52,7 +52,7 @@ use std::panic;
 use std::process::{abort, exit};
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::{Release};
+use std::sync::atomic::Ordering::Release;
 use std::time::SystemTime;
 use sysinfo::MemoryRefreshKind;
 use sysinfo::RefreshKind;
@@ -201,14 +201,17 @@ async fn check_composite(
     digits_or_expr: HipStr<'static>,
     return_permit: OwnedPermit<CompositeCheckTask>,
 ) -> bool {
-    if let Some(id) = id && c_filter.contains(&id) {
+    if let Some(id) = id
+        && c_filter.contains(&id)
+    {
         info!("{id}: Skipping duplicate C");
         return true;
     }
-    let checks_triggered = if let Some(id) = id && http
-        .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}"))
-        .await
-        .is_some()
+    let checks_triggered = if let Some(id) = id
+        && http
+            .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}"))
+            .await
+            .is_some()
     {
         info!("{id}: Checked C");
         true
@@ -222,7 +225,10 @@ async fn check_composite(
         Expression(Cow::Owned(Factor::from(digits_or_expr.as_str())))
     };
     let ProcessedStatusApiResponse {
-        factors, status, id, ..
+        factors,
+        status,
+        id,
+        ..
     } = http.known_factors_as_digits(&specifier, false, true).await;
     if factors.is_empty() {
         if status.is_known_finished() {
@@ -358,18 +364,24 @@ async fn main() -> anyhow::Result<()> {
     {
         convert_deadline(deadline_unix, &SOFT_DEADLINE);
     } else if std::env::var("CI").is_ok()
-        && SOFT_DEADLINE.set(Instant::now().add(Duration::from_hours(5))).is_ok() {
-            warn!("Set SOFT_DEADLINE using fallback for CI (5h)");
-        }
+        && SOFT_DEADLINE
+            .set(Instant::now().add(Duration::from_hours(5)))
+            .is_ok()
+    {
+        warn!("Set SOFT_DEADLINE using fallback for CI (5h)");
+    }
     let deadline_val = std::env::var("HARD_DEADLINE").ok();
     if let Some(deadline_str) = deadline_val
         && let Ok(deadline_unix) = deadline_str.parse::<u64>()
     {
         convert_deadline(deadline_unix, &HARD_DEADLINE);
     } else if std::env::var("CI").is_ok()
-        && HARD_DEADLINE.set(Instant::now().add(Duration::from_mins(355))).is_ok() {
-            warn!("Set HARD_DEADLINE using fallback for CI (5h55m)");
-        }
+        && HARD_DEADLINE
+            .set(Instant::now().add(Duration::from_mins(355)))
+            .is_ok()
+    {
+        warn!("Set HARD_DEADLINE using fallback for CI (5h55m)");
+    }
     let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
     simple_log::console("info,reqwest=debug").unwrap();
 
@@ -405,7 +417,8 @@ async fn main() -> anyhow::Result<()> {
         && let Ok(mut run_number) = run_str.parse::<EntryId>()
     {
         if let Ok(sub_run_number) = std::env::var("SUB_RUN")
-                && let Ok(sub_run_number) = sub_run_number.parse::<EntryId>() {
+            && let Ok(sub_run_number) = sub_run_number.parse::<EntryId>()
+        {
             run_number += 149993 * (11 + sub_run_number);
         }
         if c_digits.is_none() {
@@ -887,10 +900,13 @@ async fn main() -> anyhow::Result<()> {
     let chosen_c = std::env::var("CHOSEN_C");
     if let Ok(chosen_c) = chosen_c {
         for chosen_c in chosen_c.as_str().split_whitespace() {
-            c_sender.send(CompositeCheckTask {
-                id: None,
-                digits_or_expr: chosen_c.into()
-            }).await.expect("Failed to send composite check task for {chosen_c}");
+            c_sender
+                .send(CompositeCheckTask {
+                    id: None,
+                    digits_or_expr: chosen_c.into(),
+                })
+                .await
+                .expect("Failed to send composite check task for {chosen_c}");
         }
     }
     let queue_c: JoinHandle<Result<(), SendError<()>>> = if c_digits != Some(0) {
@@ -1049,7 +1065,9 @@ fn convert_deadline(deadline_unix: u64, destination: &OnceCell<Instant>) {
     };
     let exit_instant = now_instant + remaining_duration;
     if destination.set(exit_instant).is_ok() {
-        info!("Set EXIT_TIME deadline to Unix timestamp {deadline_unix} ({remaining_duration:?} remaining)");
+        info!(
+            "Set EXIT_TIME deadline to Unix timestamp {deadline_unix} ({remaining_duration:?} remaining)"
+        );
     }
 }
 

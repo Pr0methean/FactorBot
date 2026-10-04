@@ -3,11 +3,13 @@ use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, O
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::{NumericFactor, find_factors_of_numeric, get_numeric_value_cache};
 use crate::graph::EntryId;
-use crate::net::NumberStatus::{FullyFactored, Invalid, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown};
-use crate::{BasicCache, get_from_cache, HARD_DEADLINE};
+use crate::net::NumberStatus::{
+    FullyFactored, Invalid, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
+};
+use crate::{BasicCache, HARD_DEADLINE, get_from_cache};
 use crate::{
-    FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
-    MAX_ID_EQUAL_TO_VALUE, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS, create_cache,
+    FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS, MAX_ID_EQUAL_TO_VALUE,
+    ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS, create_cache,
 };
 use crate::{Factor, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
 use async_backtrace::framed;
@@ -69,10 +71,7 @@ impl CurlResponseCollector {
 
 #[cfg_attr(test, mockall::automock)]
 pub trait FactorDbClient {
-    async fn wait_if_resource_limited(
-        &self,
-        resources_text: &str,
-    ) -> bool;
+    async fn wait_if_resource_limited(&self, resources_text: &str) -> bool;
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
     async fn retrying_get_and_decode(
@@ -239,10 +238,7 @@ impl RealFactorDbClient {
 
 impl FactorDbClient for RealFactorDbClient {
     #[framed]
-    async fn wait_if_resource_limited(
-        &self,
-        resources_text: &str,
-    ) -> bool {
+    async fn wait_if_resource_limited(&self, resources_text: &str) -> bool {
         let now = Instant::now();
         let Some(captures) = self.resources_regex.captures_iter(resources_text).next() else {
             return false;
@@ -315,8 +311,7 @@ impl FactorDbClient for RealFactorDbClient {
         sleep_until(self.all_threads_blocked_until.load(Acquire).into()).await;
         loop {
             let response = self.try_get_and_decode_core(url).await?;
-            if !self.wait_if_resource_limited(&response).await
-            {
+            if !self.wait_if_resource_limited(&response).await {
                 return Some(response);
             }
         }
@@ -364,10 +359,13 @@ impl FactorDbClient for RealFactorDbClient {
                 if let Some(response) = self.try_get_and_decode(&url).await {
                     if response.is_empty() {
                         let fallback_from_empty = self
-                            .try_get_and_decode(&format!("https://factordb.com/index.php?showid={id}"))
+                            .try_get_and_decode(&format!(
+                                "https://factordb.com/index.php?showid={id}"
+                            ))
                             .await;
                         if let Some(valid_fallback_from_empty) = &fallback_from_empty
-                                && valid_fallback_from_empty.contains("Not divisible") {
+                            && valid_fallback_from_empty.contains("Not divisible")
+                        {
                             return ProcessedStatusApiResponse {
                                 status: Some(Invalid),
                                 factors: Box::new([]),
@@ -569,7 +567,7 @@ impl FactorDbClient for RealFactorDbClient {
                     return AlreadyFullyFactored;
                 }
                 (None, Some(x.to_unelided_string()))
-            },
+            }
             Id(id) => {
                 if *id <= MAX_ID_EQUAL_TO_VALUE {
                     error!("Attempted to submit factor {factor} of too-small number {id}");
