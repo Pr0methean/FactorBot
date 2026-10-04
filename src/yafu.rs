@@ -1,5 +1,5 @@
 use crate::NumberLength;
-use crate::NumberSpecifier::Expression;
+use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::algebraic::Factor;
 use crate::graph::EntryId;
@@ -15,6 +15,7 @@ use regex::Regex;
 use std::borrow::Cow;
 use std::collections::{BinaryHeap, HashSet};
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::LazyLock;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
@@ -36,7 +37,7 @@ static YAFU_FACTOR_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct YafuWorkItem {
-    pub id: EntryId,
+    pub id: Option<EntryId>,
     pub number: HipStr<'static>,
     pub lower_bound: NumberLength,
     pub upper_bound: NumberLength,
@@ -170,10 +171,10 @@ pub async fn yafu_task(
         }
 
         while let Ok(item) = receiver.try_recv() {
-            if in_flight.insert(item.id) {
+            if item.id.is_none_or(|id| in_flight.insert(id)) {
                 heap.push(item);
             } else {
-                info!("{}: Skipping duplicate yafu dispatch", item.id);
+                info!("{}: Skipping duplicate yafu dispatch", item.id.unwrap());
             }
         }
 
@@ -192,10 +193,10 @@ pub async fn yafu_task(
                 item = receiver.recv(), if !shutdown_received => {
                     match item {
                         Some(item) => {
-                            if in_flight.insert(item.id) {
+                            if item.id.is_none_or(|id| in_flight.insert(id)) {
                                 heap.push(item);
                             } else {
-                                info!("{}: Skipping duplicate yafu dispatch", item.id);
+                                info!("{}: Skipping duplicate yafu dispatch", item.id.unwrap());
                             }
                         }
                         None => {
@@ -219,12 +220,14 @@ pub async fn yafu_task(
         if persistent_yafu.is_none() {
             match PersistentYafu::spawn().await {
                 Ok(y) => {
-                    info!("{id}: Spawned new yafu process");
+                    info!("Spawned new yafu process");
                     persistent_yafu = Some(y);
                 }
                 Err(e) => {
-                    error!("{id}: Failed to spawn yafu process: {e}");
-                    in_flight.remove(&id);
+                    error!("Failed to spawn yafu process: {e}");
+                    if let Some(id) = id {
+                        in_flight.remove(&id);
+                    }
                     continue;
                 }
             }
@@ -232,7 +235,7 @@ pub async fn yafu_task(
 
         let yafu = persistent_yafu.as_mut().unwrap();
         info!(
-            "{id}: Factoring with yafu (bounds: {}..{})",
+            "{id:?}: Factoring with yafu (bounds: {}..{})",
             item.lower_bound, item.upper_bound
         );
         let start = Instant::now();
@@ -241,28 +244,21 @@ pub async fn yafu_task(
         } else {
             format!("mpqs({number})\n")
         };
-        if let Err(e) = yafu.stdin.write_all(expr.as_bytes()).await {
+        let write = async {
+            yafu.stdin.write_all(expr.as_bytes()).await?;
+            yafu.stdin.flush().await
+        };
+        if let Err(e) = write.await {
             let status = wait_for_status(&mut yafu.child).await;
             if status.as_ref().is_some_and(is_sigill) {
                 error!(
-                    "{id}: yafu process exited with SIGILL while writing stdin; aborting composite {id} ({number}) and restarting yafu"
+                    "{id:?}: yafu process exited with SIGILL while writing stdin; aborting composite ({number}) and restarting yafu"
                 );
             } else {
-                error!("{id}: Failed to write to yafu stdin: {e}");
-                in_flight.remove(&id);
-            }
-            persistent_yafu = None;
-            continue;
-        }
-        if let Err(e) = yafu.stdin.flush().await {
-            let status = wait_for_status(&mut yafu.child).await;
-            if status.as_ref().is_some_and(is_sigill) {
-                error!(
-                    "{id}: yafu process exited with SIGILL while flushing stdin; aborting composite {id} ({number}) and restarting yafu"
-                );
-            } else {
-                error!("{id}: Failed to flush yafu stdin: {e}");
-                in_flight.remove(&id);
+                error!("{id:?}: Failed to write to yafu stdin: {e}");
+                if let Some(id) = id {
+                    in_flight.remove(&id);
+                }
             }
             persistent_yafu = None;
             continue;
@@ -271,14 +267,19 @@ pub async fn yafu_task(
         let composite = Factor::from(number.as_str());
         let mut found_factors_count = 0usize;
         let mut yafu_failed = false;
-
-        loop {
+        let specifier = if let Some(id) = id {
+            Id(id)
+        } else {
+            Expression(Cow::Owned(composite))
+        };
+        let mut kill_yafu = Arc::new(AtomicBool::new(false));
+        while !kill_yafu.load(Ordering::Acquire) && !yafu_failed {
             select! {
                 biased;
                 incoming = receiver.recv(), if !shutdown_received => {
                     match incoming {
                         Some(new_item) => {
-                            if in_flight.insert(new_item.id) {
+                            if new_item.id.is_none_or(|id| in_flight.insert(id)) {
                                 heap.push(new_item);
                             }
                         }
@@ -292,35 +293,37 @@ pub async fn yafu_task(
                         Ok(Some(line)) => {
                             if let Some(caps) = YAFU_FACTOR_REGEX.captures(&line) {
                                 let factor_str = caps[1].to_owned();
-                                info!("{id}: yafu found factor {factor_str}");
+                                info!("{id:?}: yafu found factor {factor_str}");
                                 found_factors_count += 1;
 
                                 let http = http.clone();
                                 let number = number.clone();
-                                let composite = composite.clone();
+                                let kill_yafu = kill_yafu.clone();
+                                let specifier = specifier.clone();
                                 task::spawn(async move {
                                     let factor = Factor::from(factor_str.as_str());
                                     match http.try_report_factor(
-                                        Expression(Cow::Borrowed(&composite)),
+                                        &specifier,
                                         &factor,
                                     ).await {
-                                        Accepted => info!("{id}: Submitted factor {factor_str} to FactorDB"),
+                                        Accepted => info!("{specifier}: Submitted factor {factor_str} to FactorDB"),
                                         AlreadyFullyFactored => {
-                                            info!("{id}: Factor {factor_str} already known");
+                                            info!("{specifier}: Factor {factor_str} already known");
+                                            kill_yafu.store(true, Ordering::Release);
                                         }
                                         result => {
-                                            error!("{id}: Error submitting factor {factor_str}: {result:?}");
+                                            error!("{specifier}: Error submitting factor {factor_str}: {result:?}");
                                             if let Some(out) = FAILED_U_SUBMISSIONS_OUT.get() {
                                                 match out.lock().await.write_fmt(format_args!("{number},{factor_str}\n")) {
-                                                    Ok(_) => warn!("{id}: Wrote failed factor {factor_str} to failed-u-submissions.csv"),
-                                                    Err(e) => error!("{id}: Failed to write {factor_str} to failed-u-submissions.csv: {e}"),
+                                                    Ok(_) => warn!("{specifier}: Wrote failed factor {factor_str} to failed-u-submissions.csv"),
+                                                    Err(e) => error!("{specifier}: Failed to write {factor_str} to failed-u-submissions.csv: {e}"),
                                                 }
                                             }
                                         }
                                     }
                                 });
                             } else {
-                                info!("{id}: yafu: {line}");
+                                info!("{specifier}: yafu: {line}");
                             }
 
                             if line.contains("ans = 1") {
@@ -331,25 +334,23 @@ pub async fn yafu_task(
                             let status = wait_for_status(&mut yafu.child).await;
                             if status.as_ref().is_some_and(is_sigill) {
                                 error!(
-                                    "{id}: yafu process exited with SIGILL while factoring composite {number}; aborting composite {id} and restarting yafu"
+                                    "{specifier}: yafu process exited with SIGILL while factoring composite {number}; aborting composite and restarting yafu"
                                 );
                             } else {
-                                error!("{id}: yafu stdout closed unexpectedly (status: {status:?})");
+                                error!("{specifier}: yafu stdout closed unexpectedly (status: {status:?})");
                             }
                             yafu_failed = true;
-                            break;
                         }
                         Err(e) => {
                             let status = wait_for_status(&mut yafu.child).await;
                             if status.as_ref().is_some_and(is_sigill) {
                                 error!(
-                                    "{id}: yafu process exited with SIGILL while factoring composite {number}; aborting composite {id} and restarting yafu"
+                                    "{specifier}: yafu process exited with SIGILL while factoring composite {number}; aborting composite and restarting yafu"
                                 );
                             } else {
-                                error!("{id}: Error reading yafu stdout: {e} (status: {status:?})");
+                                error!("{specifier}: Error reading yafu stdout: {e} (status: {status:?})");
                             }
                             yafu_failed = true;
-                            break;
                         }
                     }
                 }
@@ -361,21 +362,23 @@ pub async fn yafu_task(
         let elapsed_nanos = elapsed.subsec_nanos();
         if found_factors_count == 0 {
             warn!(
-                "{id}: yafu found no factors after {:02}:{:02}.{:09}",
+                "{specifier}: yafu found no factors after {:02}:{:02}.{:09}",
                 elapsed_secs / 60,
                 elapsed_secs % 60,
                 elapsed_nanos
             );
         } else {
             info!(
-                "{id}: Done factoring with yafu after {:02}:{:02}.{:09}",
+                "{specifier}: Done factoring with yafu after {:02}:{:02}.{:09}",
                 elapsed_secs / 60,
                 elapsed_secs % 60,
                 elapsed_nanos
             );
         }
-
-        if yafu_failed {
+        if kill_yafu.load(Ordering::Acquire) {
+            let _ = yafu.child.kill().await;
+            persistent_yafu = None;
+        } else if yafu_failed {
             persistent_yafu = None;
         }
     }

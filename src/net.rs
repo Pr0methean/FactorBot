@@ -84,7 +84,7 @@ pub trait FactorDbClient {
     async fn try_get_expression_form(&self, entry_id: EntryId) -> Option<Factor>;
     async fn known_factors_as_digits<'a>(
         &self,
-        id: NumberSpecifier<'a>,
+        id: &NumberSpecifier<'a>,
         include_ff: bool,
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse;
@@ -93,7 +93,7 @@ pub trait FactorDbClient {
     fn invalidate_cached_factors(&self, id: Option<EntryId>, expression: &Factor);
     async fn try_report_factor<'a>(
         &self,
-        u_id: NumberSpecifier<'a>,
+        u_id: &NumberSpecifier<'a>,
         factor: &Factor,
     ) -> ReportFactorResult;
     async fn report_numeric_factor(
@@ -350,7 +350,7 @@ impl FactorDbClient for RealFactorDbClient {
     #[framed]
     async fn known_factors_as_digits<'a>(
         &self,
-        id: NumberSpecifier<'a>,
+        id: &NumberSpecifier<'a>,
         include_ff: bool,
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse {
@@ -388,7 +388,7 @@ impl FactorDbClient for RealFactorDbClient {
                     Err(None)
                 }
             }
-            Expression(ref expr) => {
+            Expression(expr) => {
                 let url = format!(
                     "https://factordb.com/api?query={}",
                     encode(&expr.to_unelided_string())
@@ -485,7 +485,7 @@ impl FactorDbClient for RealFactorDbClient {
         {
             if let Some(id) = processed
                 .id
-                .or(if let Id(id) = id { Some(id) } else { None })
+                .or(if let Id(id) = id { Some(*id) } else { None })
             {
                 self.by_id_cache.insert(id, processed.clone());
             }
@@ -555,15 +555,15 @@ impl FactorDbClient for RealFactorDbClient {
     #[framed]
     async fn try_report_factor(
         &self,
-        u_id: NumberSpecifier<'_>,
+        u_id: &NumberSpecifier<'_>,
         factor: &Factor,
     ) -> ReportFactorResult {
-        if u_id == Expression(std::borrow::Cow::Borrowed(factor)) {
+        if *u_id == Expression(std::borrow::Cow::Borrowed(factor)) {
             error!("Attempted to submit factor {factor} to itself");
             return DoesNotDivide;
         }
         let (id, number) = match u_id {
-            Expression(ref x) => {
+            Expression(x) => {
                 if let Some(x_numeric) = x.as_numeric() {
                     error!("Attempted to submit factor {factor} of too-small number {x_numeric}");
                     return AlreadyFullyFactored;
@@ -571,11 +571,11 @@ impl FactorDbClient for RealFactorDbClient {
                 (None, Some(x.to_unelided_string()))
             },
             Id(id) => {
-                if id <= MAX_ID_EQUAL_TO_VALUE {
+                if *id <= MAX_ID_EQUAL_TO_VALUE {
                     error!("Attempted to submit factor {factor} of too-small number {id}");
                     return AlreadyFullyFactored;
                 }
-                (Some(id), None)
+                (Some(*id), None)
             }
         };
         self.rate_limiter.until_ready().await;
@@ -625,7 +625,7 @@ impl FactorDbClient for RealFactorDbClient {
         factor: NumericFactor,
     ) -> ReportFactorResult {
         for _ in 0..SUBMIT_FACTOR_MAX_ATTEMPTS {
-            let result = self.try_report_factor(Id(u_id), &Numeric(factor)).await;
+            let result = self.try_report_factor(&Id(u_id), &Numeric(factor)).await;
             if result != OtherError {
                 return result;
             }

@@ -22,7 +22,6 @@ on:
         required: false
         type: number
       chosen_c:
-        # FIXME: not currently implemented by the Rust program
         description: "Specific composites to factor, separated by spaces"
         required: false
         type: string
@@ -39,6 +38,7 @@ env:
   PRP_DIGITS: ${{ inputs.prp_digits }}
   PRP_START: ${{ inputs.prp_start }}
   SUB_RUN: ${{ inputs.sub_run_id }}
+  CHOSEN_C: ${{ inputs.chosen_c }}
 jobs:
   build:
     runs-on: ubuntu-latest

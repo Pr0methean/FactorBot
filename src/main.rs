@@ -132,7 +132,7 @@ pub(crate) static FAILED_U_SUBMISSIONS_OUT: OnceCell<Mutex<File>> = OnceCell::co
 
 #[derive(Clone, Debug, Eq)]
 struct CompositeCheckTask {
-    id: EntryId,
+    id: Option<EntryId>,
     digits_or_expr: HipStr<'static>,
 }
 
@@ -197,15 +197,15 @@ async fn composites_while_waiting(
 async fn check_composite(
     http: &impl FactorDbClientReadIdsAndExprs,
     c_filter: &mut CuckooFilter<DefaultHasher>,
-    id: EntryId,
+    id: Option<EntryId>,
     digits_or_expr: HipStr<'static>,
     return_permit: OwnedPermit<CompositeCheckTask>,
 ) -> bool {
-    if c_filter.contains(&id) {
+    if let Some(id) = id && c_filter.contains(&id) {
         info!("{id}: Skipping duplicate C");
         return true;
     }
-    let checks_triggered = if http
+    let checks_triggered = if let Some(id) = id && http
         .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}"))
         .await
         .is_some()
@@ -216,16 +216,21 @@ async fn check_composite(
         false
     };
     // First, convert the composite to digits
+    let specifier = if let Some(id) = id {
+        Id(id)
+    } else {
+        Expression(Cow::Owned(Factor::from(digits_or_expr.as_str())))
+    };
     let ProcessedStatusApiResponse {
-        factors, status, ..
-    } = http.known_factors_as_digits(Id(id), false, true).await;
+        factors, status, id, ..
+    } = http.known_factors_as_digits(&specifier, false, true).await;
     if factors.is_empty() {
         if status.is_known_finished() {
-            warn!("{id}: Already fully factored");
+            warn!("{id:?}: Already fully factored");
             true
         } else {
             return_permit.send(CompositeCheckTask { id, digits_or_expr });
-            info!("{id}: Requeued C");
+            info!("{id:?}: Requeued C");
             false
         }
     } else {
@@ -235,7 +240,12 @@ async fn check_composite(
             if matches!(factor, Factor::Numeric(_)) {
                 continue;
             }
-            if graph::find_and_submit_factors(http, id, factor.clone(), true).await {
+            let specifier = if let Some(id) = id {
+                Id(id)
+            } else {
+                Expression(Cow::Borrowed(&factor))
+            };
+            if graph::find_and_submit_factors(http, &specifier, factor.clone(), true).await {
                 factors_submitted = true;
             } else {
                 if let Some(sender) = YAFU_SENDER.get() {
@@ -249,17 +259,17 @@ async fn check_composite(
                     };
                     match sender.send(item).await {
                         Ok(()) => {
-                            info!("{id}: Dispatched C to yafu");
+                            info!("{specifier}: Dispatched C to yafu");
                             dispatched = true;
                         }
-                        Err(e) => error!("{id}: Failed to send to yafu_task: {e}"),
+                        Err(e) => error!("{specifier}: Failed to send to yafu_task: {e}"),
                     }
                 }
             }
         }
         if !dispatched && !checks_triggered && !factors_submitted {
             return_permit.send(CompositeCheckTask { id, digits_or_expr });
-            info!("{id}: Requeued C");
+            info!("{specifier}: Requeued C");
             false
         } else {
             true
@@ -544,7 +554,7 @@ async fn main() -> anyhow::Result<()> {
                                     factors,
                                     ..
                                 } = check_c_and_prp_http
-                                    .known_factors_as_digits(Id(id_to_check), false, false)
+                                    .known_factors_as_digits(&Id(id_to_check), false, false)
                                     .await;
                                 if factors.is_empty() && status == Some(FullyFactored) {
                                     info!("{id}: {parameter} (ID {id_to_check}) is fully factored!");
@@ -645,7 +655,7 @@ async fn main() -> anyhow::Result<()> {
                                 factors
                             } else {
                                 check_c_and_prp_http
-                                    .known_factors_as_digits(Id(info.id), false, true)
+                                    .known_factors_as_digits(&Id(info.id), false, true)
                                     .await
                                     .factors
                             };
@@ -653,7 +663,7 @@ async fn main() -> anyhow::Result<()> {
                                 if !matches!(factor, Factor::Numeric(_)) {
                                     graph::find_and_submit_factors(
                                         check_c_and_prp_http.as_ref(),
-                                        info.id,
+                                        &Id(info.id),
                                         factor,
                                         true,
                                     )
@@ -691,7 +701,7 @@ async fn main() -> anyhow::Result<()> {
 
                 c_task = c_receiver.recv() => {
                     let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
-                    info!("{id}: Ready to check a C");
+                    info!("{id:?}: Ready to check a C");
                     check_composite(check_c_and_prp_http.as_ref(), &mut c_filter, id, digits_or_expr, return_permit).await;
                 }
             }
@@ -813,7 +823,7 @@ async fn main() -> anyhow::Result<()> {
                     let digits_or_expr = Factor::from(digits_or_expr);
                     if graph::find_and_submit_factors(
                         &*u_http,
-                        u_id,
+                        &Id(u_id),
                         digits_or_expr,
                         false,
                     )
@@ -874,6 +884,15 @@ async fn main() -> anyhow::Result<()> {
             next_backtrace = Instant::now() + STATS_INTERVAL;
         }
     });
+    let chosen_c = std::env::var("CHOSEN_C");
+    if let Ok(chosen_c) = chosen_c {
+        for chosen_c in chosen_c.as_str().split_whitespace() {
+            c_sender.send(CompositeCheckTask {
+                id: None,
+                digits_or_expr: chosen_c.into()
+            }).await.expect("Failed to send composite check task for {chosen_c}");
+        }
+    }
     let queue_c: JoinHandle<Result<(), SendError<()>>> = if c_digits != Some(0) {
         let c_http = http.clone();
         task::spawn(async move {
@@ -917,7 +936,7 @@ async fn main() -> anyhow::Result<()> {
                             c_tasks.extend(c_http
                                 .read_ids_and_exprs(&composites_page.unwrap())
                                 .map(|(id, expr)| CompositeCheckTask {
-                                    id,
+                                    id: Some(id),
                                     digits_or_expr: expr.into(),
                                 }));
                             c_tasks.shuffle(&mut rng());
