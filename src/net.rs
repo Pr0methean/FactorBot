@@ -124,6 +124,13 @@ pub struct RealFactorDbClient {
     expression_form_cache: BasicCache<EntryId, Factor>,
 }
 
+#[derive(Debug)]
+enum RawStatusResponse {
+    ApiJson(HipStr<'static>),
+    HtmlFallback(HipStr<'static>),
+    None,
+}
+
 impl RealFactorDbClient {
     pub fn new(requests_per_hour: NonZeroU32) -> Self {
         let rate_limiter =
@@ -231,6 +238,144 @@ impl RealFactorDbClient {
                 } else {
                     Some(text.into())
                 }
+            }
+        }
+    }
+
+    #[framed]
+    async fn fetch_raw_status(
+        &self,
+        id: &NumberSpecifier<'_>,
+        get_digits_as_fallback: bool,
+    ) -> RawStatusResponse {
+        match id {
+            Id(id) => {
+                let url = format!("https://factordb.com/api?id={id}");
+                match self.try_get_and_decode(&url).await {
+                    Some(response) if !response.is_empty() => RawStatusResponse::ApiJson(response),
+                    Some(_) => self.fetch_id_fallback_html(*id).await,
+                    None if get_digits_as_fallback => {
+                        sleep(RETRY_DELAY).await;
+                        self.fetch_id_fallback_html(*id).await
+                    }
+                    None => RawStatusResponse::None,
+                }
+            }
+            Expression(expr) => {
+                let url = format!(
+                    "https://factordb.com/api?query={}",
+                    encode(&expr.to_unelided_string())
+                );
+                match self.try_get_and_decode(&url).await {
+                    Some(response) => RawStatusResponse::ApiJson(response),
+                    None => RawStatusResponse::None,
+                }
+            }
+        }
+    }
+
+    #[framed]
+    async fn fetch_id_fallback_html(&self, id: EntryId) -> RawStatusResponse {
+        let url = format!("https://factordb.com/index.php?showid={id}");
+        match self.try_get_and_decode(&url).await {
+            Some(html) => RawStatusResponse::HtmlFallback(html),
+            None => RawStatusResponse::None,
+        }
+    }
+
+    fn parse_api_json(&self, id: &NumberSpecifier<'_>, json: &str) -> ProcessedStatusApiResponse {
+        let NumberStatusApiResponse {
+            status,
+            factors,
+            id: recvd_id,
+        } = match from_str::<NumberStatusApiResponse>(json) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                error!("{id}: Failed to decode API response: {e}: {json}");
+                return ProcessedStatusApiResponse::default();
+            }
+        };
+
+        let recvd_id_parsed = recvd_id.to_string().parse::<EntryId>().ok();
+        debug!("Parsed received ID {recvd_id} as {recvd_id_parsed:?}");
+        info!(
+            "{recvd_id_parsed:?} ({id}): Fetched status of {status} and {} factors of sizes {}",
+            factors.len(),
+            factors.iter().map(|(digits, _)| digits.len()).join(",")
+        );
+
+        let status = match &*status {
+            "FF" => Some(FullyFactored),
+            "P" | "PRP" => Some(Prime),
+            "C" => Some(UnfactoredComposite),
+            "CF" => Some(PartlyFactoredComposite),
+            "U" => Some(Unknown),
+            x => {
+                error!("{recvd_id:?} ({id}): Unrecognized number status code: {x}");
+                None
+            }
+        };
+
+        let mut factors: Vec<_> = factors
+            .into_iter()
+            .map(|(factor, _exponent)| Factor::from(factor.as_str()))
+            .collect();
+        factors.sort_unstable();
+        factors.dedup();
+
+        ProcessedStatusApiResponse {
+            status,
+            factors: factors.into_boxed_slice(),
+            id: recvd_id_parsed,
+        }
+    }
+
+    fn parse_html_fallback(&self, html: &str) -> ProcessedStatusApiResponse {
+        if html.contains("Error: ") || html.contains("Not divisible") {
+            return ProcessedStatusApiResponse {
+                status: Some(Invalid),
+                factors: Box::default(),
+                id: None,
+            };
+        }
+        let factors = self
+            .digits_fallback_regex
+            .captures(html)
+            .and_then(|c| c.get(1))
+            .map(|digits_cell| {
+                let digits: String = digits_cell
+                    .as_str()
+                    .chars()
+                    .filter(char::is_ascii_digit)
+                    .collect();
+                vec![Factor::from(digits.as_str())].into_boxed_slice()
+            })
+            .unwrap_or_default();
+        ProcessedStatusApiResponse {
+            status: None,
+            factors,
+            id: None,
+        }
+    }
+
+    fn maybe_cache_factors(
+        &self,
+        id: &NumberSpecifier<'_>,
+        processed: &ProcessedStatusApiResponse,
+    ) {
+        if processed.status == Some(Prime)
+            || (processed.status == Some(FullyFactored) && processed.factors.len() > 1)
+        {
+            let cache_id = processed.id.or(match id {
+                Id(entry_id) => Some(*entry_id),
+                _ => None,
+            });
+            if let Some(cache_id) = cache_id {
+                self.by_id_cache.insert(cache_id, processed.clone());
+            }
+            if let Expression(expr) = id {
+                self.by_expr_cache
+                    .insert(expr.clone().into_owned(), processed.clone());
             }
         }
     }
@@ -353,145 +498,18 @@ impl FactorDbClient for RealFactorDbClient {
         if let Some(cached) = self.cached_factors(id) {
             return cached;
         }
-        let response = match id {
-            Id(id) => {
-                let url = format!("https://factordb.com/api?id={id}");
-                if let Some(response) = self.try_get_and_decode(&url).await {
-                    if response.is_empty() {
-                        let fallback_from_empty = self
-                            .try_get_and_decode(&format!(
-                                "https://factordb.com/index.php?showid={id}"
-                            ))
-                            .await;
-                        if let Some(valid_fallback_from_empty) = &fallback_from_empty
-                            && valid_fallback_from_empty.contains("Not divisible")
-                        {
-                            return ProcessedStatusApiResponse {
-                                status: Some(Invalid),
-                                factors: Box::new([]),
-                                id: None,
-                            };
-                        } else {
-                            Err(fallback_from_empty)
-                        }
-                    } else {
-                        Ok(response)
-                    }
-                } else if get_digits_as_fallback {
-                    sleep(RETRY_DELAY).await;
-                    Err(self
-                        .try_get_and_decode(&format!("https://factordb.com/index.php?showid={id}"))
-                        .await)
-                } else {
-                    Err(None)
-                }
-            }
-            Expression(expr) => {
-                let url = format!(
-                    "https://factordb.com/api?query={}",
-                    encode(&expr.to_unelided_string())
-                );
-                self.try_get_and_decode(&url)
-                    .await
-                    .map(Ok)
-                    .unwrap_or(Err(None))
-            }
+
+        let raw_response = self.fetch_raw_status(id, get_digits_as_fallback).await;
+        debug!("{id}: Got API response:\n{raw_response:?}");
+
+        let mut processed = match raw_response {
+            RawStatusResponse::ApiJson(json) => self.parse_api_json(id, &json),
+            RawStatusResponse::HtmlFallback(html) => self.parse_html_fallback(&html),
+            RawStatusResponse::None => ProcessedStatusApiResponse::default(),
         };
-        debug!("{id}: Got API response:\n{response:?}");
-        let mut processed = match response {
-            Ok(api_response) => match from_str::<NumberStatusApiResponse>(&api_response) {
-                Err(e) => {
-                    error!("{id}: Failed to decode API response: {e}: {api_response}");
-                    ProcessedStatusApiResponse::default()
-                }
-                Ok(NumberStatusApiResponse {
-                    status,
-                    factors,
-                    id: recvd_id,
-                }) => {
-                    let recvd_id_parsed = recvd_id.to_string().parse::<EntryId>().ok();
-                    debug!("Parsed received ID {recvd_id} as {recvd_id_parsed:?}");
-                    info!(
-                        "{recvd_id_parsed:?} ({id}): Fetched status of {status} and {} factors of sizes {}",
-                        factors.len(),
-                        factors.iter().map(|(digits, _)| digits.len()).join(",")
-                    );
-                    let status = match &*status {
-                        "FF" => Some(FullyFactored),
-                        "P" | "PRP" => Some(Prime),
-                        "C" => Some(UnfactoredComposite),
-                        "CF" => Some(PartlyFactoredComposite),
-                        "U" => Some(Unknown),
-                        x => {
-                            error!("{recvd_id:?} ({id}): Unrecognized number status code: {x}");
-                            None
-                        }
-                    };
-                    let factors = {
-                        let mut factors: Vec<_> = factors
-                            .into_iter()
-                            .map(|(factor, _exponent)| Factor::from(factor.as_str()))
-                            .collect();
-                        factors.sort_unstable();
-                        factors.dedup();
-                        factors
-                    };
-                    ProcessedStatusApiResponse {
-                        status,
-                        factors: factors.into_boxed_slice(),
-                        id: recvd_id_parsed,
-                    }
-                }
-            },
-            Err(None) => ProcessedStatusApiResponse {
-                status: None,
-                id: None,
-                factors: Box::new([]),
-            },
-            Err(Some(fallback_response)) => {
-                if fallback_response.contains("Error: ") {
-                    return ProcessedStatusApiResponse {
-                        status: Some(Invalid),
-                        factors: Box::new([]),
-                        id: None,
-                    };
-                }
-                let factors = self
-                    .digits_fallback_regex
-                    .captures(&fallback_response)
-                    .and_then(|c| c.get(1))
-                    .map(|digits_cell| {
-                        vec![Factor::from(
-                            digits_cell
-                                .as_str()
-                                .chars()
-                                .filter(char::is_ascii_digit)
-                                .collect::<String>()
-                                .as_str(),
-                        )]
-                    })
-                    .unwrap_or_default();
-                ProcessedStatusApiResponse {
-                    status: None,
-                    factors: factors.into_boxed_slice(),
-                    id: None,
-                }
-            }
-        };
-        if processed.status == Some(Prime)
-            || (processed.status == Some(FullyFactored) && processed.factors.len() > 1)
-        {
-            if let Some(id) = processed
-                .id
-                .or(if let Id(id) = id { Some(*id) } else { None })
-            {
-                self.by_id_cache.insert(id, processed.clone());
-            }
-            if let Expression(expr) = &id {
-                self.by_expr_cache
-                    .insert(expr.clone().into_owned(), processed.clone());
-            }
-        }
+
+        self.maybe_cache_factors(id, &processed);
+
         if !include_ff && processed.status.is_known_finished() {
             processed.factors = Box::default();
         }
