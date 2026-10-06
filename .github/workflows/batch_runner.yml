@@ -2,11 +2,11 @@ name: Rust Batch
 permissions:
   contents: read
 on:
-  schedule:
-    - cron: '41 1,13 * * *'
-    - cron: '41 4,16 * * *'
-    - cron: '41 7,19 * * *'
-    - cron: '41 10,22 * * *'
+  # schedule:
+  #   - cron: '41 1,13 * * *'
+  #   - cron: '41 4,16 * * *'
+  #   - cron: '41 7,19 * * *'
+  #   - cron: '41 10,22 * * *'
   push:
     branches: [ "main" ]
   pull_request:
