@@ -23,7 +23,7 @@ cuckoofilter = "0.5"
 rand = "0.10"
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
-num-modular = "0.6.5"
+num-modular = "0.7.0"
 num-prime = { version = "0.7", default-features = false, features = ["big-table"] }
 urlencoding = "2.1"
 anyhow = "1.0"
