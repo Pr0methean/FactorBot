@@ -1,3 +1,9 @@
+## Currently broken
+
+This tool was broken by a change to factordb.com on 2026-10-06, and I don't know if I'll have time to fix it any time
+soon due to my work on [zip](https://github.com/zip-rs/zip2) and my ongoing job hunt. I'll gladly review a pull request
+if someone else wants to update it.
+
 ## Finishing the unfinished entries on FactorDB
 
 This program in this repository helps the field of pure mathematics by factorizing large integers or establishing that 
