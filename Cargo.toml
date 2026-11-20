@@ -40,7 +40,7 @@ peg = "0.8"
 yamaquasi = { git = "https://github.com/remyoudompheng/yamaquasi.git" }
 derivative = "2.2"
 ahash = "0.8"
-sysinfo = "0.39"
+sysinfo = "0.40"
 stats_alloc = { version = "0.1", features = ["nightly"] }
 paste = "1.0"
 tokio-stream = { version = "0.1.18", features = ["signal"] }
